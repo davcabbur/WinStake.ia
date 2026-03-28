@@ -13,6 +13,7 @@ from src.football_client import FootballClient
 from src.analyzer import Analyzer
 from src.formatter import Formatter
 from src.telegram_bot import TelegramSender
+from src.database import Database
 
 # ── Logging ───────────────────────────────────────────────
 logging.basicConfig(
@@ -34,6 +35,7 @@ def main():
     analyzer = Analyzer()
     formatter = Formatter()
     telegram = TelegramSender()
+    db = Database()
 
     # ── 2. Obtener cuotas ────────────────────────────────
     logger.info("📊 Obteniendo cuotas de mercado...")
@@ -85,20 +87,39 @@ def main():
         else:
             logger.info("   ❌ Sin valor")
 
-    # ── 5. Resumen ───────────────────────────────────────
+    # ── 5. Persistencia ──────────────────────────────────
+    logger.info("\n💾 Guardando análisis en base de datos...")
+    saved_count = 0
+    value_saved = 0
+    for analysis in analyses:
+        db.save_analysis(analysis)
+        saved_count += 1
+        if analysis.best_bet and analysis.best_bet.is_value:
+            value_saved += 1
+    logger.info(f"   → {saved_count} análisis guardados, {value_saved} value bets registradas")
+
+    # ── 6. Resumen ───────────────────────────────────────
     value_count = sum(1 for a in analyses if a.best_bet and a.best_bet.is_value)
     logger.info(f"\n📊 Resumen: {value_count}/{len(analyses)} partidos con valor")
 
-    # ── 6. Formatear ─────────────────────────────────────
+    # ROI acumulado
+    roi = db.get_roi_summary()
+    if roi["total_bets"] > 0:
+        logger.info(
+            f"📈 ROI acumulado: {roi['roi_percent']:+.1f}% "
+            f"({roi['wins']}W-{roi['losses']}L, {roi['total_profit']:+.1f}u)"
+        )
+
+    # ── 7. Formatear ─────────────────────────────────────
     logger.info("📝 Formateando reporte...")
     messages = formatter.format_full_report(analyses)
     logger.info(f"   → {len(messages)} mensajes generados")
 
-    # ── 7. Enviar a Telegram ─────────────────────────────
+    # ── 8. Enviar a Telegram ─────────────────────────────
     logger.info("📲 Enviando a Telegram...")
     success = telegram.send_messages(messages)
 
-    # ── 8. Resultado ─────────────────────────────────────
+    # ── 9. Resultado ─────────────────────────────────────
     elapsed = (datetime.now() - start_time).total_seconds()
     if success:
         logger.info(f"\n✅ Análisis completado en {elapsed:.1f}s")
