@@ -89,6 +89,7 @@ class Analyzer:
         home_stats: Optional[dict] = None,
         away_stats: Optional[dict] = None,
         commence_time: str = "",
+        h2h_data: Optional[list] = None,
     ) -> MatchAnalysis:
         """
         Análisis completo de un partido.
@@ -100,6 +101,7 @@ class Analyzer:
             home_stats: Stats del local (de standings)
             away_stats: Stats del visitante (de standings)
             commence_time: Fecha/hora del partido
+            h2h_data: Historial de enfrentamientos directos
 
         Returns:
             MatchAnalysis con todos los resultados
@@ -111,9 +113,9 @@ class Analyzer:
             market_odds=odds,
         )
 
-        # 1. Calcular lambdas (goles esperados) — con xG si disponible
+        # 1. Calcular lambdas (goles esperados) — con xG, H2H y forma
         lambda_home, lambda_away, xg_home, xg_away, xg_used = self._calculate_lambdas(
-            home_stats, away_stats
+            home_stats, away_stats, h2h_data
         )
 
         # 2. Calcular probabilidades vía Poisson
@@ -143,7 +145,7 @@ class Analyzer:
 
         # 6. Generar insights
         analysis.insights = self._generate_insights(
-            home_team, away_team, probs, odds, home_stats, away_stats, best
+            home_team, away_team, probs, odds, home_stats, away_stats, best, h2h_data
         )
 
         return analysis
@@ -152,6 +154,7 @@ class Analyzer:
         self,
         home_stats: Optional[dict],
         away_stats: Optional[dict],
+        h2h_data: Optional[list] = None,
     ) -> tuple[float, float, float, float, bool]:
         """
         Calcula los parámetros λ (goles esperados) para cada equipo.
@@ -238,6 +241,24 @@ class Analyzer:
         # Clamp razonable
         lambda_home = max(0.3, min(4.0, lambda_home))
         lambda_away = max(0.2, min(3.5, lambda_away))
+
+        # ── Ajuste por Forma Reciente ─────────────────────
+        if home_stats and away_stats:
+            home_form_mult = self._form_multiplier(home_stats.get("form", ""))
+            away_form_mult = self._form_multiplier(away_stats.get("form", ""))
+            if home_form_mult != 1.0 or away_form_mult != 1.0:
+                lambda_home *= home_form_mult
+                lambda_away *= away_form_mult
+                lambda_home = max(0.3, min(4.0, lambda_home))
+                lambda_away = max(0.2, min(3.5, lambda_away))
+
+        # ── Ajuste por H2H ──────────────────────────────
+        if h2h_data and len(h2h_data) >= 2:
+            h2h_adj_home, h2h_adj_away = self._h2h_adjustment(h2h_data)
+            lambda_home *= h2h_adj_home
+            lambda_away *= h2h_adj_away
+            lambda_home = max(0.3, min(4.0, lambda_home))
+            lambda_away = max(0.2, min(3.5, lambda_away))
 
         return round(lambda_home, 3), round(lambda_away, 3), round(xg_home_val, 2), round(xg_away_val, 2), xg_used
 
@@ -364,6 +385,93 @@ class Analyzer:
         else:
             return "Baja"
 
+    @staticmethod
+    def _form_multiplier(form: str) -> float:
+        """
+        Calcula multiplicador de lambda basado en forma reciente.
+        Convierte string de forma (ej: 'WWDLW') en un multiplicador.
+
+        W=+2, D=0, L=-2 sobre los últimos 5 partidos.
+        Resultado: multiplicador entre 0.90 y 1.10 (±10% máx).
+        """
+        if not form:
+            return 1.0
+
+        # Tomar los últimos 5 resultados
+        recent = form[-5:].upper()
+        if len(recent) < 3:
+            return 1.0
+
+        score = 0
+        for char in recent:
+            if char == 'W':
+                score += 2
+            elif char == 'D':
+                score += 0
+            elif char == 'L':
+                score -= 2
+
+        # Normalizar: max score = 10 (WWWWW), min = -10 (LLLLL)
+        # Mapear a multiplicador [0.90, 1.10]
+        max_score = len(recent) * 2
+        normalized = score / max_score  # -1.0 a 1.0
+        multiplier = 1.0 + (normalized * 0.10)  # 0.90 a 1.10
+
+        return round(multiplier, 3)
+
+    @staticmethod
+    def _h2h_adjustment(h2h_data: list) -> tuple[float, float]:
+        """
+        Calcula ajuste de lambda basado en historial directo (H2H).
+
+        Analiza los últimos enfrentamientos entre ambos equipos:
+        - Si un equipo domina históricamente, boost de +5-8%
+        - Si hay muchos empates, ligero boost al draw
+        - Max ajuste: ±8%
+
+        Returns:
+            (home_multiplier, away_multiplier)
+        """
+        if not h2h_data or len(h2h_data) < 2:
+            return 1.0, 1.0
+
+        home_wins = 0
+        away_wins = 0
+        draws = 0
+        total_home_goals = 0
+        total_away_goals = 0
+
+        for match in h2h_data:
+            hg = match.get("home_goals", 0) or 0
+            ag = match.get("away_goals", 0) or 0
+            total_home_goals += hg
+            total_away_goals += ag
+
+            if match.get("home_winner") is True:
+                home_wins += 1
+            elif match.get("home_winner") is False:
+                away_wins += 1
+            else:
+                draws += 1
+
+        total = len(h2h_data)
+        if total == 0:
+            return 1.0, 1.0
+
+        # Dominancia: qué equipo gana más en los enfrentamientos directos
+        home_rate = home_wins / total
+        away_rate = away_wins / total
+
+        # Ajuste proporcional: max ±8%
+        home_adj = 1.0 + (home_rate - away_rate) * 0.08
+        away_adj = 1.0 + (away_rate - home_rate) * 0.08
+
+        # Clamp
+        home_adj = max(0.92, min(1.08, home_adj))
+        away_adj = max(0.92, min(1.08, away_adj))
+
+        return round(home_adj, 3), round(away_adj, 3)
+
     def _generate_insights(
         self,
         home_team: str,
@@ -373,6 +481,7 @@ class Analyzer:
         home_stats: Optional[dict],
         away_stats: Optional[dict],
         best_bet: Optional[EVResult],
+        h2h_data: Optional[list] = None,
     ) -> list[str]:
         """Genera insights estilo Moneyball basados en datos."""
         insights = []
@@ -384,7 +493,43 @@ class Analyzer:
             f"{away_team} {probs.lambda_away:.1f} (Total: {total_lambda:.1f})"
         )
 
+        # xG insight
+        if probs.xg_used:
+            xg_diff_home = probs.xg_home - (home_stats["goals_for"] / max(home_stats["played"], 1)) if home_stats else 0
+            if abs(xg_diff_home) > 0.3:
+                if xg_diff_home > 0:
+                    insights.append(f"⚡ {home_team} rinde por debajo de su xG — mala suerte, debería mejorar")
+                else:
+                    insights.append(f"🎯 {home_team} supera su xG — eficiencia goleadora alta")
+
         if home_stats and away_stats:
+            # Forma reciente
+            home_form = home_stats.get("form", "")
+            away_form = away_stats.get("form", "")
+            if home_form:
+                form_display = " ".join(home_form[-5:].upper())
+                mult = self._form_multiplier(home_form)
+                if mult >= 1.06:
+                    insights.append(f"🔥 {home_team} en racha: {form_display} (λ +{(mult-1)*100:.0f}%)")
+                elif mult <= 0.94:
+                    insights.append(f"❌ {home_team} en mala racha: {form_display} (λ {(mult-1)*100:.0f}%)")
+
+            if away_form:
+                form_display = " ".join(away_form[-5:].upper())
+                mult = self._form_multiplier(away_form)
+                if mult >= 1.06:
+                    insights.append(f"🔥 {away_team} en racha: {form_display} (λ +{(mult-1)*100:.0f}%)")
+                elif mult <= 0.94:
+                    insights.append(f"❌ {away_team} en mala racha: {form_display} (λ {(mult-1)*100:.0f}%)")
+
+            # H2H insight
+            if h2h_data and len(h2h_data) >= 2:
+                h2h_home_adj, h2h_away_adj = self._h2h_adjustment(h2h_data)
+                if h2h_home_adj > 1.03:
+                    insights.append(f"🏆 {home_team} domina el H2H (últimos {len(h2h_data)} enfrentamientos)")
+                elif h2h_away_adj > 1.03:
+                    insights.append(f"🏆 {away_team} domina el H2H (últimos {len(h2h_data)} enfrentamientos)")
+
             # Diferencial de calidad
             diff = home_stats.get("goal_diff", 0) - away_stats.get("goal_diff", 0)
             if abs(diff) > 20:

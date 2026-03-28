@@ -67,6 +67,16 @@ def main():
         home_stats = football_client.find_team_in_standings(home, standings)
         away_stats = football_client.find_team_in_standings(away, standings)
 
+        # Obtener H2H (historial directo)
+        h2h_data = []
+        if home_stats and away_stats:
+            home_id = home_stats.get("team_id")
+            away_id = away_stats.get("team_id")
+            if home_id and away_id:
+                h2h_data = football_client.get_h2h(home_id, away_id)
+                if h2h_data:
+                    logger.info(f"      📜 H2H: {len(h2h_data)} enfrentamientos previos")
+
         # Ejecutar análisis
         analysis = analyzer.analyze_match(
             home_team=home,
@@ -75,6 +85,7 @@ def main():
             home_stats=home_stats,
             away_stats=away_stats,
             commence_time=match.get("commence_time", ""),
+            h2h_data=h2h_data,
         )
         analyses.append(analysis)
 
