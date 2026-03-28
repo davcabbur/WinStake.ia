@@ -22,7 +22,8 @@ class Database:
     """Gestiona la persistencia en SQLite para WinStake.ia."""
 
     def __init__(self, db_path: str = DB_PATH):
-        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        if db_path != ":memory:":
+            os.makedirs(os.path.dirname(db_path), exist_ok=True)
         self.db_path = db_path
         self._init_db()
 

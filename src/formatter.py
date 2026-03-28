@@ -99,9 +99,11 @@ class Formatter:
         lines.append("<b>4. Mejor apuesta</b>")
         if a.best_bet and a.best_bet.is_value:
             confidence_icon = {"Alta": "🟢", "Media": "🟡", "Baja": "🔴"}.get(a.confidence, "⚪")
+            ev_icon = "🔥" if a.best_bet.ev_percent >= 15 else ("🟢" if a.best_bet.ev_percent >= 5 else "✅")
+            
             lines.append(f"   📌 Selección: <b>{a.best_bet.selection}</b>")
             lines.append(f"   💰 Cuota: {a.best_bet.odds:.2f}")
-            lines.append(f"   📈 EV: {a.best_bet.ev_percent:+.1f}%")
+            lines.append(f"   {ev_icon} EV: {a.best_bet.ev_percent:+.1f}%")
             lines.append(f"   {confidence_icon} Confianza: {a.confidence}")
         else:
             lines.append("   ❌ <b>No apostar</b> — Sin EV positivo suficiente")
@@ -166,14 +168,15 @@ class Formatter:
 
             total_stake = 0
             for a in value_bets:
+                b = a.best_bet
                 confidence_icon = {"Alta": "🟢", "Media": "🟡", "Baja": "🔴"}.get(a.confidence, "⚪")
+                ev_icon = "🔥" if b.ev_percent >= 15 else ("🟢" if b.ev_percent >= 5 else "✅")
                 stake = a.kelly.stake_units if a.kelly else 0
                 total_stake += stake
-                lines.append(
-                    f"  {confidence_icon} {a.home_team} vs {a.away_team}\n"
-                    f"     → <b>{a.best_bet.selection}</b> @ {a.best_bet.odds:.2f} "
-                    f"(EV: {a.best_bet.ev_percent:+.1f}%) — {stake:.1f}u"
-                )
+                lines.append(f"• <b>{a.home_team} vs {a.away_team}</b>")
+                lines.append(f"  {ev_icon} {b.selection} @ {b.odds:.2f} (EV: {b.ev_percent:+.1f}%)")
+                lines.append(f"  {confidence_icon} Stake: {stake:.1f}u | Conf: {a.confidence}")
+                lines.append("")
 
             lines.append(f"\n💼 Exposición total: {total_stake:.1f} unidades / {self._bankroll_units()}")
         else:

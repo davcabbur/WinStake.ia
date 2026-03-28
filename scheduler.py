@@ -20,17 +20,10 @@ import schedule
 
 from main import main as run_analysis
 
+from src.logger_config import setup_logging
+
 # ── Logging ───────────────────────────────────────────────
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    datefmt="%H:%M:%S",
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler("winstake_scheduler.log", encoding="utf-8"),
-    ],
-)
-logger = logging.getLogger("Scheduler")
+logger = setup_logging("Scheduler")
 
 # ── Configuración de horarios ─────────────────────────────
 # La Liga: partidos viernes, sábado y domingo

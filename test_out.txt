@@ -1,0 +1,62 @@
+============================= test session starts =============================
+platform win32 -- Python 3.12.10, pytest-9.0.2, pluggy-1.6.0 -- C:\Users\davec\OneDrive\Documentos\WinStake.ia\venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\davec\OneDrive\Documentos\WinStake.ia
+plugins: anyio-4.13.0, cov-7.1.0
+collecting ... collected 5 items
+
+tests/test_analyzer.py::test_poisson_probabilities PASSED                [ 20%]
+tests/test_analyzer.py::test_calculate_ev PASSED                         [ 40%]
+tests/test_analyzer.py::test_kelly_criterion PASSED                      [ 60%]
+tests/test_database.py::test_database_initialization PASSED              [ 80%]
+tests/test_database.py::test_database_initialization ERROR               [ 80%]
+tests/test_database.py::test_save_and_retrieve_roi FAILED                [100%]
+
+=================================== ERRORS ====================================
+______________ ERROR at teardown of test_database_initialization ______________
+
+    @pytest.fixture
+    def mock_db():
+        fd, path = tempfile.mkstemp(suffix=".sqlite")
+        os.close(fd)
+        db = Database(db_path=path)
+        yield db
+        if os.path.exists(path):
+>           os.remove(path)
+E           PermissionError: [WinError 32] El proceso no tiene acceso al archivo porque está siendo utilizado por otro proceso: 'C:\\Users\\davec\\AppData\\Local\\Temp\\tmpwhf4wft9.sqlite'
+
+tests\test_database.py:15: PermissionError
+================================== FAILURES ===================================
+_________________________ test_save_and_retrieve_roi __________________________
+
+mock_db = <src.database.Database object at 0x000001A3431B7110>
+
+    def test_save_and_retrieve_roi(mock_db):
+        """Guarda un análisis y comprueba el ROI vacío."""
+        roi = mock_db.get_roi_summary()
+        assert roi["total_bets"] == 0
+        assert roi["wins"] == 0
+        assert roi["roi_percent"] == 0.0
+    
+        # Guardar uno real
+        analysis = MatchAnalysis(
+            home_team="Fake Team 1",
+            away_team="Fake Team 2",
+            commence_time="2025-01-01T20:00:00Z",
+            market_odds={"home": 2.0, "draw": 3.0, "away": 3.5}
+        )
+        analysis.best_bet = EVResult(selection="Local", odds=2.0, probability=0.6, ev_percent=20.0, is_value=True)
+    
+        # Requeriríamos persistencia mock real, pero al menos probamos el guardado sin fallos
+        mock_db.save_analysis(analysis)
+    
+        # Check si sumó algo (aunque won/loss estarán en null)
+>       cursor = mock_db.conn.cursor()
+                 ^^^^^^^^^^^^
+E       AttributeError: 'Database' object has no attribute 'conn'
+
+tests\test_database.py:47: AttributeError
+=========================== short test summary info ===========================
+FAILED tests/test_database.py::test_save_and_retrieve_roi - AttributeError: '...
+ERROR tests/test_database.py::test_database_initialization - PermissionError:...
+==================== 1 failed, 4 passed, 1 error in 1.12s =====================

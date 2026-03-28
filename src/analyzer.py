@@ -351,7 +351,7 @@ class Analyzer:
                     odds=odd,
                     ev=round(ev, 4),
                     ev_percent=round(ev * 100, 2),
-                    is_value=ev >= self.min_ev,
+                    is_value=bool((ev * 100) >= self.min_ev),
                 ))
 
         return results

@@ -15,13 +15,10 @@ from src.formatter import Formatter
 from src.telegram_bot import TelegramSender
 from src.database import Database
 
+from src.logger_config import setup_logging
+
 # ── Logging ───────────────────────────────────────────────
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    datefmt="%H:%M:%S",
-)
-logger = logging.getLogger("WinStake")
+logger = setup_logging("WinStake")
 
 
 def main():
@@ -121,14 +118,19 @@ def main():
             f"({roi['wins']}W-{roi['losses']}L, {roi['total_profit']:+.1f}u)"
         )
 
-    # ── 7. Formatear ─────────────────────────────────────
-    logger.info("📝 Formateando reporte...")
-    messages = formatter.format_full_report(analyses)
-    logger.info(f"   → {len(messages)} mensajes generados")
+    # ── 7. Formatear y Enviar ────────────────────────────
+    if value_count > 0:
+        logger.info("📝 Formateando reporte (solo partidos con Value)...")
+        # Filtrar solo los análisis con valor para no saturar Telegram
+        value_analyses = [a for a in analyses if a.best_bet and a.best_bet.is_value]
+        messages = formatter.format_full_report(value_analyses)
+        logger.info(f"   → {len(messages)} mensajes generados")
 
-    # ── 8. Enviar a Telegram ─────────────────────────────
-    logger.info("📲 Enviando a Telegram...")
-    success = telegram.send_messages(messages)
+        logger.info("📲 Enviando a Telegram...")
+        success = telegram.send_messages(messages)
+    else:
+        logger.info("🛑 No se detectaron Value Bets. No se envía mensaje a Telegram.")
+        success = True
 
     # ── 9. Resultado ─────────────────────────────────────
     elapsed = (datetime.now() - start_time).total_seconds()
