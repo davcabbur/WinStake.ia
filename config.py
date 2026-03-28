@@ -41,3 +41,9 @@ MIN_EDGE_PERCENT = 0.05       # Edge mínimo vs mercado (5%)
 
 # ── Telegram ──────────────────────────────────────────────
 TELEGRAM_MAX_MSG_LENGTH = 4096
+
+# ── Caché ─────────────────────────────────────────────────
+CACHE_TTL_ODDS = 30 * 60          # 30 minutos — cuotas cambian frecuentemente
+CACHE_TTL_STANDINGS = 2 * 60 * 60 # 2 horas — clasificación cambia poco
+CACHE_TTL_TEAM_STATS = 4 * 60 * 60 # 4 horas — stats detalladas
+CACHE_TTL_H2H = 24 * 60 * 60     # 24 horas — historial no cambia

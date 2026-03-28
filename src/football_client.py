@@ -8,6 +8,7 @@ import logging
 from typing import Optional
 
 import config
+from src.cache import APICache
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,7 @@ class FootballClient:
         self.headers = {
             "x-apisports-key": self.api_key,
         }
+        self.cache = APICache()
 
         if not self.api_key or self.api_key == "tu_clave_aqui":
             logger.warning("⚠️  FOOTBALL_API_KEY no configurada. Usando datos simulados.")
@@ -54,6 +56,13 @@ class FootballClient:
         """Obtiene la clasificación actual de La Liga."""
         if self._mock_mode:
             return self._get_mock_standings()
+
+        # Intentar caché primero
+        cache_key = f"standings_{config.LA_LIGA_ID}_{config.CURRENT_SEASON}"
+        cached = self.cache.get(cache_key, config.CACHE_TTL_STANDINGS)
+        if cached is not None:
+            logger.info(f"✅ Clasificación desde caché ({len(cached)} equipos) — 0 requests usadas")
+            return cached
 
         data = self._request("standings", {
             "league": config.LA_LIGA_ID,
@@ -97,6 +106,12 @@ class FootballClient:
                 }
                 for team in standings_raw
             ]
+
+            # Guardar en caché
+            self.cache.set(cache_key, result)
+            logger.info(f"💾 Clasificación guardada en caché (TTL: {config.CACHE_TTL_STANDINGS // 3600}h)")
+            return result
+
         except (KeyError, IndexError) as e:
             logger.error(f"❌ Error parseando standings: {e}")
             return self._get_mock_standings()
@@ -105,6 +120,12 @@ class FootballClient:
         """Obtiene estadísticas detalladas de un equipo."""
         if self._mock_mode:
             return None
+
+        # Intentar caché
+        cache_key = f"team_stats_{team_id}_{config.CURRENT_SEASON}"
+        cached = self.cache.get(cache_key, config.CACHE_TTL_TEAM_STATS)
+        if cached is not None:
+            return cached
 
         data = self._request("teams/statistics", {
             "league": config.LA_LIGA_ID,
@@ -116,7 +137,7 @@ class FootballClient:
 
         try:
             stats = data["response"]
-            return {
+            result = {
                 "team_id": stats["team"]["id"],
                 "team_name": stats["team"]["name"],
                 "form": stats.get("form", ""),
@@ -129,6 +150,10 @@ class FootballClient:
                 "clean_sheets_total": stats["clean_sheet"]["total"],
                 "failed_to_score_total": stats["failed_to_score"]["total"],
             }
+
+            self.cache.set(cache_key, result)
+            return result
+
         except (KeyError, TypeError) as e:
             logger.error(f"❌ Error parseando team stats: {e}")
             return None
@@ -138,6 +163,12 @@ class FootballClient:
         if self._mock_mode:
             return []
 
+        # Intentar caché
+        cache_key = f"h2h_{min(team1_id, team2_id)}_{max(team1_id, team2_id)}"
+        cached = self.cache.get(cache_key, config.CACHE_TTL_H2H)
+        if cached is not None:
+            return cached
+
         data = self._request("fixtures/headtohead", {
             "h2h": f"{team1_id}-{team2_id}",
             "last": last,
@@ -146,7 +177,7 @@ class FootballClient:
             return []
 
         try:
-            return [
+            result = [
                 {
                     "date": fix["fixture"]["date"],
                     "home_team": fix["teams"]["home"]["name"],
@@ -157,6 +188,10 @@ class FootballClient:
                 }
                 for fix in data.get("response", [])
             ]
+
+            self.cache.set(cache_key, result)
+            return result
+
         except (KeyError, TypeError):
             return []
 

@@ -8,6 +8,7 @@ import logging
 from typing import Optional
 
 import config
+from src.cache import APICache
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,7 @@ class OddsClient:
     def __init__(self, api_key: str = None):
         self.api_key = api_key or config.ODDS_API_KEY
         self.base_url = config.ODDS_API_BASE
+        self.cache = APICache()
 
         if not self.api_key or self.api_key == "tu_clave_aqui":
             logger.warning("⚠️  ODDS_API_KEY no configurada. Usando datos simulados.")
@@ -32,6 +34,13 @@ class OddsClient:
         """
         if self._mock_mode:
             return self._get_mock_odds()
+
+        # Intentar caché primero
+        cache_key = f"odds_{config.SPORT_KEY}"
+        cached = self.cache.get(cache_key, config.CACHE_TTL_ODDS)
+        if cached is not None:
+            logger.info(f"✅ Cuotas desde caché ({len(cached)} partidos) — 0 requests usadas")
+            return cached
 
         try:
             url = f"{self.base_url}/sports/{config.SPORT_KEY}/odds"
@@ -48,7 +57,13 @@ class OddsClient:
             remaining = response.headers.get("x-requests-remaining", "?")
             logger.info(f"✅ Odds API: {len(raw_data)} partidos. Requests restantes: {remaining}")
 
-            return self._parse_odds(raw_data)
+            parsed = self._parse_odds(raw_data)
+
+            # Guardar en caché
+            self.cache.set(cache_key, parsed)
+            logger.info(f"💾 Cuotas guardadas en caché (TTL: {config.CACHE_TTL_ODDS // 60}min)")
+
+            return parsed
 
         except requests.exceptions.HTTPError as e:
             logger.error(f"❌ Odds API HTTP error: {e}")
