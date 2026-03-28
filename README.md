@@ -121,7 +121,7 @@ WinStake.ia/
 
 ```bash
 # 1. Clonar el repositorio
-git clone https://github.com/tu-usuario/WinStake.ia.git
+git clone https://github.com/davcabbur/WinStake.ia.git
 cd WinStake.ia
 
 # 2. Crear entorno virtual
@@ -162,7 +162,10 @@ TELEGRAM_CHAT_ID=tu_chat_id
 
 ### Ejecución manual
 ```bash
+# En Windows (con el entorno virtual activado):
 python main.py
+# O directamente:
+.\venv\Scripts\python.exe main.py
 ```
 
 ### Modo desarrollo (sin API keys)
@@ -184,7 +187,8 @@ Si no configuras las API keys, el sistema funciona con **datos simulados** basad
 📊 Resumen: 4/10 partidos con valor
 📝 Formateando reporte...
 📲 Enviando a Telegram...
-✅ Análisis completado en 2.3s
+✅ Mensaje 1/22 enviado...
+✅ Análisis completado en 24.7s
 ```
 
 ---
