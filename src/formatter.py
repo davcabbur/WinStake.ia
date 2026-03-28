@@ -116,9 +116,33 @@ class Formatter:
             lines.append(f"   Riesgo: {a.kelly.risk_level}")
             lines.append("")
 
-        # 6. Claves
+        # 6. Mercados adicionales
+        lines.append("<b>6. Mercados adicionales</b>")
+
+        # BTTS
+        p = a.probabilities
+        lines.append(f"   ⚽ BTTS Sí: {p.btts_yes*100:.0f}% | BTTS No: {p.btts_no*100:.0f}%")
+
+        # Correct Score (top 3)
+        if a.correct_scores:
+            scores_str = " | ".join(
+                f"{cs['score']} ({cs['percentage']}%)"
+                for cs in a.correct_scores[:3]
+            )
+            lines.append(f"   🎯 Marcadores: {scores_str}")
+
+        # Asian Handicap
+        if a.asian_handicap and a.asian_handicap.get("best_line"):
+            bl = a.asian_handicap["best_line"]
+            lines.append(
+                f"   📐 H.Asiático: {bl['label']} → "
+                f"Local {bl['home_cover_pct']}% | Visitante {bl['away_cover_pct']}%"
+            )
+        lines.append("")
+
+        # 7. Claves
         if a.insights:
-            lines.append("<b>6. Claves 🧠</b>")
+            lines.append("<b>7. Claves 🧠</b>")
             for insight in a.insights[:4]:  # Max 4 insights
                 lines.append(f"   • {insight}")
 

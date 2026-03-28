@@ -67,6 +67,8 @@ class MatchAnalysis:
     confidence: str = "Baja"
     insights: list = field(default_factory=list)
     recommendation: str = "No apostar"
+    correct_scores: list = field(default_factory=list)     # Top resultados exactos
+    asian_handicap: dict = field(default_factory=dict)     # Análisis hándicap asiático
 
 
 class Analyzer:
@@ -143,7 +145,17 @@ class Analyzer:
             analysis.recommendation = "No apostar"
             analysis.confidence = "—"
 
-        # 6. Generar insights
+        # 6. Correct Score (Top 5 resultados más probables)
+        analysis.correct_scores = self._correct_score_matrix(
+            probs.lambda_home, probs.lambda_away
+        )
+
+        # 7. Hándicap Asiático
+        analysis.asian_handicap = self._asian_handicap(
+            probs.lambda_home, probs.lambda_away, odds
+        )
+
+        # 8. Generar insights
         analysis.insights = self._generate_insights(
             home_team, away_team, probs, odds, home_stats, away_stats, best, h2h_data
         )
@@ -326,6 +338,8 @@ class Analyzer:
             ("Visitante", probs.away_win, odds.get("away")),
             ("Over 2.5", probs.over_25, odds.get("over_25")),
             ("Under 2.5", probs.under_25, odds.get("under_25")),
+            ("BTTS Sí", probs.btts_yes, odds.get("btts_yes")),
+            ("BTTS No", probs.btts_no, odds.get("btts_no")),
         ]
 
         for name, prob, odd in outcomes:
@@ -341,6 +355,87 @@ class Analyzer:
                 ))
 
         return results
+
+    def _correct_score_matrix(
+        self, lambda_home: float, lambda_away: float, top_n: int = 5
+    ) -> list[dict]:
+        """
+        Genera la matriz de resultados exactos más probables.
+        Usa la distribución Poisson para calcular P(home=h, away=a).
+
+        Returns:
+            Lista de dicts: [{"score": "1-0", "probability": 0.12}, ...]
+        """
+        scores = []
+        for h in range(6):  # 0-5 goles
+            for a in range(6):
+                prob = poisson.pmf(h, lambda_home) * poisson.pmf(a, lambda_away)
+                scores.append({
+                    "score": f"{h}-{a}",
+                    "home_goals": h,
+                    "away_goals": a,
+                    "probability": round(prob, 4),
+                    "percentage": round(prob * 100, 1),
+                })
+
+        # Ordenar por probabilidad descendente
+        scores.sort(key=lambda x: x["probability"], reverse=True)
+        return scores[:top_n]
+
+    def _asian_handicap(
+        self, lambda_home: float, lambda_away: float, odds: dict
+    ) -> dict:
+        """
+        Calcula análisis de hándicap asiático.
+
+        Hándicaps comunes: -0.5, -1.0, -1.5, +0.5, +1.0, +1.5
+        Calcula la probabilidad de cubrir cada línea usando Poisson.
+
+        Returns:
+            Dict con líneas de hándicap y sus probabilidades
+        """
+        handicaps = [-1.5, -1.0, -0.5, 0, +0.5, +1.0, +1.5]
+        result = {"lines": [], "best_line": None}
+
+        for hcap in handicaps:
+            # P(home covers): P(home_goals - away_goals > -hcap)
+            # Ej: hcap=-1.5 → home necesita ganar por 2+
+            p_cover_home = 0.0
+            p_cover_away = 0.0
+
+            for h in range(self.max_goals + 1):
+                for a in range(self.max_goals + 1):
+                    p = poisson.pmf(h, lambda_home) * poisson.pmf(a, lambda_away)
+                    margin = h - a
+
+                    # Hándicap al equipo local
+                    adjusted = margin + hcap
+                    if adjusted > 0:
+                        p_cover_home += p
+                    elif adjusted < 0:
+                        p_cover_away += p
+                    # adjusted == 0 → push (devolución)
+
+            line_info = {
+                "handicap": hcap,
+                "label": f"{'Local' if hcap <= 0 else 'Visitante'} {hcap:+.1f}",
+                "home_cover_prob": round(p_cover_home, 4),
+                "away_cover_prob": round(p_cover_away, 4),
+                "home_cover_pct": round(p_cover_home * 100, 1),
+                "away_cover_pct": round(p_cover_away * 100, 1),
+            }
+            result["lines"].append(line_info)
+
+            # Encontrar la línea más equilibrada (closest to 50/50)
+            if not result["best_line"]:
+                result["best_line"] = line_info
+            else:
+                curr_balance = abs(p_cover_home - 0.5)
+                best_balance = abs(result["best_line"]["home_cover_prob"] - 0.5)
+                if curr_balance < best_balance:
+                    result["best_line"] = line_info
+
+        return result
 
     def _find_best_bet(self, ev_results: list[EVResult]) -> Optional[EVResult]:
         """Encuentra el resultado con mayor EV positivo."""
