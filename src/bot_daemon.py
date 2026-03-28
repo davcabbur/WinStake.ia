@@ -16,6 +16,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config
 from src.database import Database
+from main import main as run_analysis
 from src.logger_config import setup_logging
 
 logger = setup_logging("WinStakeBot")
