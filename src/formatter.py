@@ -74,6 +74,8 @@ class Formatter:
         lines.append(f"   Empate: {p.draw*100:.1f}%")
         lines.append(f"   {a.away_team}: {p.away_win*100:.1f}%")
         lines.append(f"   λ Local: {p.lambda_home:.2f} | λ Visitante: {p.lambda_away:.2f}")
+        if p.xg_used:
+            lines.append(f"   ⚡ xG: {a.home_team} {p.xg_home:.2f} — {a.away_team} {p.xg_away:.2f}")
         lines.append("")
 
         # 2. Cuotas

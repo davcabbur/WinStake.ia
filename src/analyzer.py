@@ -11,6 +11,7 @@ from typing import Optional
 from scipy.stats import poisson
 
 import config
+from src.xg_estimator import XGEstimator, XG_WEIGHT
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,9 @@ class MatchProbabilities:
     btts_no: float = 0.0
     lambda_home: float = 0.0
     lambda_away: float = 0.0
+    xg_home: float = 0.0        # xG por partido del equipo local
+    xg_away: float = 0.0        # xG por partido del equipo visitante
+    xg_used: bool = False       # Si se usó xG en el cálculo
 
 
 @dataclass
@@ -107,11 +111,16 @@ class Analyzer:
             market_odds=odds,
         )
 
-        # 1. Calcular lambdas (goles esperados)
-        lambda_home, lambda_away = self._calculate_lambdas(home_stats, away_stats)
+        # 1. Calcular lambdas (goles esperados) — con xG si disponible
+        lambda_home, lambda_away, xg_home, xg_away, xg_used = self._calculate_lambdas(
+            home_stats, away_stats
+        )
 
         # 2. Calcular probabilidades vía Poisson
         probs = self._poisson_probabilities(lambda_home, lambda_away)
+        probs.xg_home = xg_home
+        probs.xg_away = xg_away
+        probs.xg_used = xg_used
         analysis.probabilities = probs
 
         # 3. Calcular EV para cada resultado
@@ -143,12 +152,18 @@ class Analyzer:
         self,
         home_stats: Optional[dict],
         away_stats: Optional[dict],
-    ) -> tuple[float, float]:
+    ) -> tuple[float, float, float, float, bool]:
         """
         Calcula los parámetros λ (goles esperados) para cada equipo.
-        Usa datos reales si están disponibles, sino estimación por cuotas.
+        Usa xG si está disponible, mezclado con goles reales.
+
+        Returns:
+            (lambda_home, lambda_away, xg_home, xg_away, xg_used)
         """
         avg_goals_per_team = self.league_avg_goals / 2  # ~1.325
+        xg_home_val = 0.0
+        xg_away_val = 0.0
+        xg_used = False
 
         if home_stats and away_stats:
             # Fuerza atacante/defensiva relativa a la media
@@ -168,15 +183,52 @@ class Analyzer:
             lambda_home *= (1 + self.home_advantage)
             lambda_away *= (1 - self.home_advantage * 0.5)
 
-            # Usar datos local/visitante si disponibles
-            if "home" in home_stats and home_stats["home"]["played"] > 0:
-                home_home_gf = home_stats["home"]["goals_for"] / home_stats["home"]["played"]
-                # Mezclar con media general usando form_weight
-                lambda_home = lambda_home * (1 - self.form_weight) + home_home_gf * self.form_weight
+            # ── xG Integration ────────────────────────────────
+            # Si tenemos datos de xG, mezclar con goles reales
+            home_xg_pm = home_stats.get("xg_for_per_match", 0)
+            away_xg_pm = away_stats.get("xg_for_per_match", 0)
+            home_xga_pm = home_stats.get("xg_against_per_match", 0)
+            away_xga_pm = away_stats.get("xg_against_per_match", 0)
 
-            if "away" in away_stats and away_stats["away"]["played"] > 0:
-                away_away_gf = away_stats["away"]["goals_for"] / away_stats["away"]["played"]
-                lambda_away = lambda_away * (1 - self.form_weight) + away_away_gf * self.form_weight
+            if home_xg_pm > 0 and away_xg_pm > 0:
+                xg_used = True
+                xg_home_val = home_xg_pm
+                xg_away_val = away_xg_pm
+
+                # Calcular lambdas basados en xG
+                home_xg_attack = home_xg_pm / avg_goals_per_team
+                away_xg_defense = away_xga_pm / avg_goals_per_team
+                away_xg_attack = away_xg_pm / avg_goals_per_team
+                home_xg_defense = home_xga_pm / avg_goals_per_team
+
+                lambda_home_xg = home_xg_attack * away_xg_defense * avg_goals_per_team
+                lambda_away_xg = away_xg_attack * home_xg_defense * avg_goals_per_team
+
+                # Ajuste ventaja local también al xG
+                lambda_home_xg *= (1 + self.home_advantage)
+                lambda_away_xg *= (1 - self.home_advantage * 0.5)
+
+                # Mezclar xG con goles reales (XG_WEIGHT = 0.65)
+                lambda_home = XGEstimator.blend_xg_with_goals(
+                    lambda_home_xg, lambda_home, XG_WEIGHT
+                )
+                lambda_away = XGEstimator.blend_xg_with_goals(
+                    lambda_away_xg, lambda_away, XG_WEIGHT
+                )
+
+                logger.debug(
+                    f"xG blend: home λ={lambda_home:.2f} (xG:{lambda_home_xg:.2f}, "
+                    f"goals:{home_attack * away_defense * avg_goals_per_team:.2f})"
+                )
+            else:
+                # Sin xG: usar datos local/visitante si disponibles
+                if "home" in home_stats and home_stats["home"]["played"] > 0:
+                    home_home_gf = home_stats["home"]["goals_for"] / home_stats["home"]["played"]
+                    lambda_home = lambda_home * (1 - self.form_weight) + home_home_gf * self.form_weight
+
+                if "away" in away_stats and away_stats["away"]["played"] > 0:
+                    away_away_gf = away_stats["away"]["goals_for"] / away_stats["away"]["played"]
+                    lambda_away = lambda_away * (1 - self.form_weight) + away_away_gf * self.form_weight
 
         else:
             # Sin datos → usar cuotas implícitas como proxy
@@ -187,7 +239,7 @@ class Analyzer:
         lambda_home = max(0.3, min(4.0, lambda_home))
         lambda_away = max(0.2, min(3.5, lambda_away))
 
-        return round(lambda_home, 3), round(lambda_away, 3)
+        return round(lambda_home, 3), round(lambda_away, 3), round(xg_home_val, 2), round(xg_away_val, 2), xg_used
 
     def _poisson_probabilities(
         self, lambda_home: float, lambda_away: float

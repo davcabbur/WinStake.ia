@@ -230,31 +230,32 @@ class FootballClient:
     def _get_mock_standings(self) -> list[dict]:
         """Datos simulados basados en la clasificación real J29."""
         logger.info("🔧 Usando clasificación simulada (modo desarrollo)")
+        #                Name              pts  pld  w  d  l  gf gc  xgf   xga
         teams = [
-            ("Barcelona", 77, 29, 24, 5, 0, 78, 28),
-            ("Real Madrid", 69, 29, 22, 3, 4, 63, 26),
-            ("Villarreal", 58, 29, 18, 4, 7, 54, 34),
-            ("Atlético Madrid", 57, 29, 17, 6, 6, 49, 28),
-            ("Real Betis", 44, 29, 11, 11, 7, 44, 37),
-            ("Celta Vigo", 41, 29, 10, 11, 8, 41, 35),
-            ("Real Sociedad", 38, 29, 10, 8, 11, 44, 45),
-            ("Getafe", 38, 29, 11, 5, 13, 25, 31),
-            ("Athletic Club", 38, 29, 11, 5, 13, 32, 41),
-            ("Osasuna", 37, 29, 10, 7, 12, 34, 35),
-            ("Espanyol", 37, 29, 10, 7, 12, 36, 44),
-            ("Valencia", 35, 29, 9, 8, 12, 32, 42),
-            ("Girona", 34, 29, 8, 10, 11, 31, 44),
-            ("Rayo Vallecano", 32, 29, 7, 11, 11, 28, 35),
-            ("Sevilla", 31, 29, 8, 7, 14, 37, 49),
-            ("Deportivo Alavés", 31, 29, 8, 7, 14, 30, 41),
-            ("Elche", 29, 29, 6, 11, 12, 38, 46),
-            ("Mallorca", 28, 29, 7, 7, 15, 34, 47),
-            ("Levante", 26, 29, 6, 8, 15, 34, 48),
-            ("Real Oviedo", 21, 29, 4, 9, 16, 20, 48),
+            ("Barcelona",          77, 29, 24, 5, 0, 78, 28, 72.5, 31.2),
+            ("Real Madrid",        69, 29, 22, 3, 4, 63, 26, 58.0, 28.5),
+            ("Villarreal",         58, 29, 18, 4, 7, 54, 34, 50.8, 36.1),
+            ("Atlético Madrid",    57, 29, 17, 6, 6, 49, 28, 44.3, 30.4),
+            ("Real Betis",         44, 29, 11, 11, 7, 44, 37, 40.2, 38.9),
+            ("Celta Vigo",         41, 29, 10, 11, 8, 41, 35, 38.5, 36.7),
+            ("Real Sociedad",      38, 29, 10, 8, 11, 44, 45, 39.1, 41.3),
+            ("Getafe",             38, 29, 11, 5, 13, 25, 31, 22.8, 33.5),
+            ("Athletic Club",      38, 29, 11, 5, 13, 32, 41, 30.5, 38.2),
+            ("Osasuna",            37, 29, 10, 7, 12, 34, 35, 31.9, 36.8),
+            ("Espanyol",           37, 29, 10, 7, 12, 36, 44, 33.4, 42.1),
+            ("Valencia",           35, 29, 9, 8, 12, 32, 42, 30.1, 39.7),
+            ("Girona",             34, 29, 8, 10, 11, 31, 44, 35.2, 40.5),
+            ("Rayo Vallecano",     32, 29, 7, 11, 11, 28, 35, 26.3, 37.1),
+            ("Sevilla",            31, 29, 8, 7, 14, 37, 49, 34.8, 45.6),
+            ("Deportivo Alavés",   31, 29, 8, 7, 14, 30, 41, 28.1, 43.2),
+            ("Elche",              29, 29, 6, 11, 12, 38, 46, 34.5, 44.8),
+            ("Mallorca",           28, 29, 7, 7, 15, 34, 47, 29.7, 44.1),
+            ("Levante",            26, 29, 6, 8, 15, 34, 48, 31.2, 46.3),
+            ("Real Oviedo",        21, 29, 4, 9, 16, 20, 48, 19.5, 45.9),
         ]
 
         standings = []
-        for i, (name, pts, played, w, d, l, gf, gc) in enumerate(teams, 1):
+        for i, (name, pts, played, w, d, l, gf, gc, xgf, xga) in enumerate(teams, 1):
             # Estimar splits local/visitante (aprox 60/40)
             home_p = played // 2 + (1 if i % 2 == 0 else 0)
             away_p = played - home_p
@@ -276,6 +277,10 @@ class FootballClient:
                 "goals_against": gc,
                 "goal_diff": gf - gc,
                 "form": "",
+                "xg_for": xgf,
+                "xg_against": xga,
+                "xg_for_per_match": round(xgf / played, 2),
+                "xg_against_per_match": round(xga / played, 2),
                 "home": {
                     "played": home_p,
                     "wins": int(w * 0.6),
