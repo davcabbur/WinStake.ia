@@ -1,1 +1,99 @@
 /* You can add global styles to this file, and also import other style files */
+
+:root {
+  /* Premium Dark Mode Colors */
+  --bg-main: #0a0a0c;
+  --bg-surface: #131316;
+  --bg-surface-hover: #1c1c20;
+  
+  --text-primary: #ffffff;
+  --text-secondary: #909099;
+  
+  --accent-primary: #3b82f6;      /* Blue */
+  --accent-secondary: #8b5cf6;    /* Purple */
+  
+  --status-success-bg: rgba(16, 185, 129, 0.15);
+  --status-success-text: #10b981;
+  --status-error-bg: rgba(239, 68, 68, 0.15);
+  --status-error-text: #ef4444;
+  --status-warning-bg: rgba(245, 158, 11, 0.15);
+  --status-warning-text: #f59e0b;
+  
+  --border-color: rgba(255, 255, 255, 0.08);
+  
+  --font-family: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--bg-main);
+  color: var(--text-primary);
+  font-family: var(--font-family);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Typography */
+h1, h2, h3, h4, h5, h6 {
+  margin: 0;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+h1 { font-size: 24px; }
+h2 { font-size: 18px; }
+
+/* Dashboard Layout Base */
+.dashboard-layout {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.dashboard-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+/* Glassmorphism Cards */
+.glass-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  padding: 24px;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  backdrop-filter: blur(10px);
+}
+
+/* Badge tags */
+.badge {
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.badge-success { background: var(--status-success-bg); color: var(--status-success-text); }
+.badge-error { background: var(--status-error-bg); color: var(--status-error-text); }
+.badge-warning { background: var(--status-warning-bg); color: var(--status-warning-text); }
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-main); 
+}
+::-webkit-scrollbar-thumb {
+  background: var(--bg-surface-hover); 
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-secondary); 
+}
