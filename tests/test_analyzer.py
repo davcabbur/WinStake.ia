@@ -1,6 +1,6 @@
 import pytest
 from src.analyzer import Analyzer, MatchAnalysis, MatchProbabilities, EVResult, KellyResult
-from src.ev_calculator import remove_overround, fair_odds
+from src.ev_calculator import EVCalculator, remove_overround, fair_odds
 from src.market_analyzer import form_multiplier, h2h_adjustment, H2H_MIN_MATCHES
 
 
@@ -443,3 +443,95 @@ def test_analyze_match_no_stats(analyzer):
     analysis = analyzer.analyze_match("Team A", "Team B", odds)
     assert analysis.probabilities.home_win > 0
     assert analysis.probabilities.draw > 0
+
+
+# ── Correlation Detection ─────────────────────────────────
+
+def test_correlation_no_value_bets():
+    """Sin value bets, no hay correlaciones."""
+    results = [
+        EVResult(selection="Local", ev=-0.05, is_value=False),
+        EVResult(selection="Over 2.5", ev=-0.03, is_value=False),
+    ]
+    warnings = EVCalculator.detect_correlated_bets(results)
+    assert warnings == []
+
+
+def test_correlation_single_value_bet():
+    """Una sola value bet no puede estar correlacionada."""
+    results = [
+        EVResult(selection="Local", ev=0.10, is_value=True),
+        EVResult(selection="Empate", ev=-0.05, is_value=False),
+    ]
+    warnings = EVCalculator.detect_correlated_bets(results)
+    assert warnings == []
+
+
+def test_correlation_local_over25():
+    """Local + Over 2.5 son correlacionadas."""
+    results = [
+        EVResult(selection="Local", ev=0.10, is_value=True),
+        EVResult(selection="Over 2.5", ev=0.08, is_value=True),
+    ]
+    warnings = EVCalculator.detect_correlated_bets(results)
+    assert len(warnings) == 1
+    assert "Correlación" in warnings[0]
+    assert "Local" in warnings[0]
+
+
+def test_correlation_btts_over25_redundant():
+    """BTTS Sí + Over 2.5 son redundantes."""
+    results = [
+        EVResult(selection="BTTS Sí", ev=0.10, is_value=True),
+        EVResult(selection="Over 2.5", ev=0.08, is_value=True),
+    ]
+    warnings = EVCalculator.detect_correlated_bets(results)
+    assert len(warnings) == 1
+    assert "redundantes" in warnings[0]
+
+
+def test_correlation_empate_under25():
+    """Empate + Under 2.5 son correlacionadas."""
+    results = [
+        EVResult(selection="Empate", ev=0.05, is_value=True),
+        EVResult(selection="Under 2.5", ev=0.04, is_value=True),
+    ]
+    warnings = EVCalculator.detect_correlated_bets(results)
+    assert len(warnings) == 1
+    assert "Empate" in warnings[0]
+
+
+def test_stake_adjustment_redundant_drops_lower_ev():
+    """En bets redundantes, la de menor EV se descarta (multiplier=0)."""
+    calc = EVCalculator()
+    results = [
+        EVResult(selection="BTTS Sí", ev=0.10, ev_percent=10, is_value=True),
+        EVResult(selection="Over 2.5", ev=0.05, ev_percent=5, is_value=True),
+    ]
+    multipliers = calc.adjust_correlated_stakes(results)
+    assert multipliers["BTTS Sí"] == 1.0  # Mayor EV, se mantiene
+    assert multipliers["Over 2.5"] == 0.0  # Menor EV, se descarta
+
+
+def test_stake_adjustment_correlated_reduces():
+    """En bets correlacionadas (no redundantes), se reduce 30%."""
+    calc = EVCalculator()
+    results = [
+        EVResult(selection="Local", ev=0.10, ev_percent=10, is_value=True),
+        EVResult(selection="Over 2.5", ev=0.08, ev_percent=8, is_value=True),
+    ]
+    multipliers = calc.adjust_correlated_stakes(results)
+    assert multipliers["Local"] == 0.70
+    assert multipliers["Over 2.5"] == 0.70
+
+
+def test_stake_adjustment_no_correlation():
+    """Bets no correlacionadas mantienen stake completo."""
+    calc = EVCalculator()
+    results = [
+        EVResult(selection="Local", ev=0.10, ev_percent=10, is_value=True),
+        EVResult(selection="BTTS No", ev=0.05, ev_percent=5, is_value=True),
+    ]
+    multipliers = calc.adjust_correlated_stakes(results)
+    assert multipliers["Local"] == 1.0
+    assert multipliers["BTTS No"] == 1.0

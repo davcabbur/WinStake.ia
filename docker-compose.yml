@@ -1,0 +1,38 @@
+version: "3.9"
+
+services:
+  # Ejecución programada del análisis
+  scheduler:
+    build:
+      context: .
+      target: scheduler
+    env_file: .env
+    volumes:
+      - winstake-data:/app/data
+    restart: unless-stopped
+
+  # Dashboard API (FastAPI)
+  dashboard:
+    build:
+      context: .
+      target: dashboard
+    env_file: .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - winstake-data:/app/data
+    restart: unless-stopped
+
+  # Ejecución única del análisis (bajo demanda)
+  bot:
+    build:
+      context: .
+      target: bot
+    env_file: .env
+    volumes:
+      - winstake-data:/app/data
+    profiles:
+      - manual  # Solo se ejecuta con: docker compose --profile manual run bot
+
+volumes:
+  winstake-data:

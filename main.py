@@ -4,7 +4,9 @@ Orquesta: obtener datos → analizar → formatear → enviar a Telegram.
 """
 
 import sys
+import csv
 import logging
+import argparse
 from datetime import datetime
 
 import config
@@ -21,18 +23,90 @@ from src.logger_config import setup_logging
 logger = setup_logging("WinStake")
 
 
+def parse_args():
+    """Parsea argumentos de línea de comandos."""
+    parser = argparse.ArgumentParser(
+        description="WinStake.ia — Análisis cuantitativo de apuestas La Liga",
+    )
+    parser.add_argument(
+        "--mock-mode",
+        action="store_true",
+        help="Usar datos simulados sin llamar a las APIs reales",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Ejecutar análisis sin enviar mensajes a Telegram ni guardar en BD",
+    )
+    parser.add_argument(
+        "--output-csv",
+        type=str,
+        metavar="FILE",
+        help="Exportar resultados a un archivo CSV",
+    )
+    parser.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        help="Activar logging en modo DEBUG",
+    )
+    return parser.parse_args()
+
+
+def export_csv(analyses: list, filepath: str):
+    """Exporta los análisis a CSV."""
+    with open(filepath, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            "home_team", "away_team", "commence_time",
+            "prob_home", "prob_draw", "prob_away",
+            "prob_over25", "lambda_home", "lambda_away",
+            "odds_home", "odds_draw", "odds_away", "odds_over25", "odds_under25",
+            "best_selection", "best_odds", "ev_percent",
+            "kelly_half", "stake_units", "confidence",
+        ])
+        for a in analyses:
+            p = a.probabilities
+            odds = a.market_odds
+            writer.writerow([
+                a.home_team, a.away_team, a.commence_time,
+                f"{p.home_win:.4f}", f"{p.draw:.4f}", f"{p.away_win:.4f}",
+                f"{p.over_25:.4f}", f"{p.lambda_home:.3f}", f"{p.lambda_away:.3f}",
+                odds.get("home", ""), odds.get("draw", ""), odds.get("away", ""),
+                odds.get("over_25", ""), odds.get("under_25", ""),
+                a.best_bet.selection if a.best_bet else "",
+                f"{a.best_bet.odds:.2f}" if a.best_bet else "",
+                f"{a.best_bet.ev_percent:.2f}" if a.best_bet else "",
+                f"{a.kelly.kelly_half:.2f}" if a.kelly else "",
+                f"{a.kelly.stake_units:.1f}" if a.kelly else "",
+                a.confidence,
+            ])
+    logger.info(f"📄 Resultados exportados a {filepath}")
+
+
 def main():
     """Flujo principal de WinStake.ia."""
+    args = parse_args()
+
+    if args.verbose:
+        logging.getLogger().setLevel(logging.DEBUG)
+
     start_time = datetime.now()
     logger.info("🚀 WinStake.ia iniciando análisis...")
+
+    if args.dry_run:
+        logger.info("   ⚠️  Modo dry-run: sin Telegram ni BD")
+    if args.mock_mode:
+        logger.info("   🔧 Modo mock: datos simulados")
 
     # ── 1. Inicializar clientes ──────────────────────────
     odds_client = OddsClient()
     football_client = FootballClient()
     analyzer = Analyzer()
     formatter = Formatter()
-    telegram = TelegramSender()
-    db = Database()
+
+    if args.mock_mode:
+        odds_client._mock_mode = True
+        football_client._mock_mode = True
 
     # ── 2. Obtener cuotas ────────────────────────────────
     logger.info("📊 Obteniendo cuotas de mercado...")
@@ -60,11 +134,9 @@ def main():
 
         logger.info(f"   Analizando: {home} vs {away}")
 
-        # Buscar stats en standings
         home_stats = football_client.find_team_in_standings(home, standings)
         away_stats = football_client.find_team_in_standings(away, standings)
 
-        # Obtener H2H (historial directo)
         h2h_data = []
         if home_stats and away_stats:
             home_id = home_stats.get("team_id")
@@ -74,7 +146,6 @@ def main():
                 if h2h_data:
                     logger.info(f"      📜 H2H: {len(h2h_data)} enfrentamientos previos")
 
-        # Ejecutar análisis
         analysis = analyzer.analyze_match(
             home_team=home,
             away_team=away,
@@ -86,7 +157,6 @@ def main():
         )
         analyses.append(analysis)
 
-        # Log resultado
         if analysis.best_bet and analysis.best_bet.is_value:
             logger.info(
                 f"   ✅ VALUE BET: {analysis.best_bet.selection} "
@@ -96,38 +166,46 @@ def main():
             logger.info("   ❌ Sin valor")
 
     # ── 5. Persistencia ──────────────────────────────────
-    logger.info("\n💾 Guardando análisis en base de datos...")
-    saved_count = 0
-    value_saved = 0
-    for analysis in analyses:
-        db.save_analysis(analysis)
-        saved_count += 1
-        if analysis.best_bet and analysis.best_bet.is_value:
-            value_saved += 1
-    logger.info(f"   → {saved_count} análisis guardados, {value_saved} value bets registradas")
+    if not args.dry_run:
+        db = Database()
+        logger.info("\n💾 Guardando análisis en base de datos...")
+        saved_count = 0
+        value_saved = 0
+        for analysis in analyses:
+            db.save_analysis(analysis)
+            saved_count += 1
+            if analysis.best_bet and analysis.best_bet.is_value:
+                value_saved += 1
+        logger.info(f"   → {saved_count} análisis guardados, {value_saved} value bets registradas")
 
-    # ── 6. Resumen ───────────────────────────────────────
+        roi = db.get_roi_summary()
+        if roi["total_bets"] > 0:
+            logger.info(
+                f"📈 ROI acumulado: {roi['roi_percent']:+.1f}% "
+                f"({roi['wins']}W-{roi['losses']}L, {roi['total_profit']:+.1f}u)"
+            )
+
+    # ── 6. Export CSV ────────────────────────────────────
+    if args.output_csv:
+        export_csv(analyses, args.output_csv)
+
+    # ── 7. Resumen ───────────────────────────────────────
     value_count = sum(1 for a in analyses if a.best_bet and a.best_bet.is_value)
     logger.info(f"\n📊 Resumen: {value_count}/{len(analyses)} partidos con valor")
 
-    # ROI acumulado
-    roi = db.get_roi_summary()
-    if roi["total_bets"] > 0:
-        logger.info(
-            f"📈 ROI acumulado: {roi['roi_percent']:+.1f}% "
-            f"({roi['wins']}W-{roi['losses']}L, {roi['total_profit']:+.1f}u)"
-        )
-
-    # ── 7. Formatear y Enviar ────────────────────────────
-    if value_count > 0:
+    # ── 8. Formatear y Enviar ────────────────────────────
+    if value_count > 0 and not args.dry_run:
         logger.info("📝 Formateando reporte (solo partidos con Value)...")
-        # Filtrar solo los análisis con valor para no saturar Telegram
         value_analyses = [a for a in analyses if a.best_bet and a.best_bet.is_value]
         messages = formatter.format_full_report(value_analyses)
         logger.info(f"   → {len(messages)} mensajes generados")
 
+        telegram = TelegramSender()
         logger.info("📲 Enviando a Telegram...")
         success = telegram.send_messages(messages)
+    elif value_count > 0 and args.dry_run:
+        logger.info("📝 Dry-run: reporte generado pero no enviado")
+        success = True
     else:
         logger.info("🛑 No se detectaron Value Bets. No se envía mensaje a Telegram.")
         success = True

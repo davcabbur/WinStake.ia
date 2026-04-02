@@ -146,3 +146,100 @@ class EVCalculator:
             return "Media"
         else:
             return "Baja"
+
+    @staticmethod
+    def detect_correlated_bets(ev_results: list[EVResult]) -> list[str]:
+        """
+        Detecta value bets correlacionadas en el mismo partido.
+
+        Grupos correlacionados:
+        - 1X2: Local, Empate, Visitante (mutuamente excluyentes, no correlacionadas entre sí)
+        - Goles: Over 2.5 ↔ Local/Visitante (favorito gana → más goles probable)
+        - BTTS: BTTS Sí ↔ Over 2.5 (ambos equipos marcan → casi siempre over)
+
+        Returns:
+            Lista de advertencias sobre correlaciones detectadas.
+        """
+        value_selections = {r.selection for r in ev_results if r.is_value}
+        if len(value_selections) < 2:
+            return []
+
+        warnings = []
+
+        # Correlación: resultado + totales
+        result_bets = value_selections & {"Local", "Visitante"}
+        if result_bets and "Over 2.5" in value_selections:
+            team = next(iter(result_bets))
+            warnings.append(
+                f"Correlación: {team} + Over 2.5 están correlacionados. "
+                f"Reducir stake combinado un 30%."
+            )
+
+        # Correlación: BTTS + Over 2.5
+        if "BTTS Sí" in value_selections and "Over 2.5" in value_selections:
+            warnings.append(
+                "Correlación: BTTS Sí + Over 2.5 son altamente redundantes. "
+                "Apostar solo al de mayor EV."
+            )
+
+        # Correlación: Empate + Under 2.5
+        if "Empate" in value_selections and "Under 2.5" in value_selections:
+            warnings.append(
+                "Correlación: Empate + Under 2.5 están correlacionados. "
+                "Reducir stake combinado un 25%."
+            )
+
+        # Correlación: BTTS No + Under 2.5
+        if "BTTS No" in value_selections and "Under 2.5" in value_selections:
+            warnings.append(
+                "Correlación: BTTS No + Under 2.5 son redundantes. "
+                "Apostar solo al de mayor EV."
+            )
+
+        return warnings
+
+    def adjust_correlated_stakes(
+        self, ev_results: list[EVResult]
+    ) -> dict[str, float]:
+        """
+        Calcula stakes ajustados cuando hay bets correlacionadas.
+
+        Aplica un factor de reducción a bets que comparten riesgo:
+        - Bets redundantes (BTTS Sí + Over 2.5): solo la de mayor EV
+        - Bets correlacionadas (Local + Over 2.5): reducir 30% cada una
+
+        Returns:
+            Dict {selection: stake_multiplier} donde 1.0 = sin ajuste, 0.0 = no apostar
+        """
+        value_bets = [r for r in ev_results if r.is_value]
+        value_selections = {r.selection for r in value_bets}
+        multipliers = {r.selection: 1.0 for r in value_bets}
+
+        if len(value_bets) < 2:
+            return multipliers
+
+        # Redundantes: solo apostar al de mayor EV
+        redundant_pairs = [
+            ("BTTS Sí", "Over 2.5"),
+            ("BTTS No", "Under 2.5"),
+        ]
+        for a, b in redundant_pairs:
+            if a in value_selections and b in value_selections:
+                ev_a = next(r.ev for r in value_bets if r.selection == a)
+                ev_b = next(r.ev for r in value_bets if r.selection == b)
+                loser = b if ev_a >= ev_b else a
+                multipliers[loser] = 0.0
+
+        # Correlacionadas: reducir 30%
+        correlated_pairs = [
+            ({"Local", "Visitante"}, "Over 2.5", 0.70),
+            ({"Empate"}, "Under 2.5", 0.75),
+        ]
+        for result_set, totals_bet, factor in correlated_pairs:
+            matched = result_set & value_selections
+            if matched and totals_bet in value_selections:
+                for sel in matched:
+                    multipliers[sel] = min(multipliers[sel], factor)
+                multipliers[totals_bet] = min(multipliers[totals_bet], factor)
+
+        return multipliers

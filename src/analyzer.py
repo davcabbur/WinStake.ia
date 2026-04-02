@@ -116,6 +116,11 @@ class Analyzer:
             home_team, away_team, probs, odds, home_stats, away_stats, best, h2h_data
         )
 
+        # 9. Detección de correlación entre mercados
+        correlation_warnings = self._ev_calc.detect_correlated_bets(ev_results)
+        if correlation_warnings:
+            analysis.insights.extend(f"⚠️ {w}" for w in correlation_warnings)
+
         return analysis
 
     def _calculate_lambdas(
