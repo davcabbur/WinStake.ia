@@ -1,8 +1,9 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 import sqlite3
 from src.database import DB_PATH, Database
+from src.api.auth import require_api_key
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_api_key)])
 
 def get_db_connection():
     conn = sqlite3.connect(DB_PATH)

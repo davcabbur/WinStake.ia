@@ -101,6 +101,8 @@ class Database:
         """
         conn = self._get_conn()
         try:
+            conn.execute("BEGIN")
+
             p = analysis.probabilities
             odds = analysis.market_odds
 
@@ -158,6 +160,9 @@ class Database:
             conn.commit()
             return analysis_id
 
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             conn.close()
 

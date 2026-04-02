@@ -4,6 +4,8 @@ Obtiene cuotas de mercado para La Liga desde The Odds API v4.
 """
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 import logging
 from typing import Optional
 
@@ -13,6 +15,21 @@ from src.cache import APICache
 logger = logging.getLogger(__name__)
 
 
+def _create_session(retries: int = 3, backoff_factor: float = 0.5) -> requests.Session:
+    """Crea una sesión HTTP con retry y backoff exponencial."""
+    session = requests.Session()
+    retry_strategy = Retry(
+        total=retries,
+        backoff_factor=backoff_factor,  # 0.5s, 1s, 2s
+        status_forcelist=[500, 502, 503, 504],
+        allowed_methods=["GET"],
+    )
+    adapter = HTTPAdapter(max_retries=retry_strategy)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
+
+
 class OddsClient:
     """Cliente para The Odds API v4."""
 
@@ -20,6 +37,7 @@ class OddsClient:
         self.api_key = api_key or config.ODDS_API_KEY
         self.base_url = config.ODDS_API_BASE
         self.cache = APICache()
+        self.session = _create_session()
 
         if not self.api_key or self.api_key == "tu_clave_aqui":
             logger.warning("⚠️  ODDS_API_KEY no configurada. Usando datos simulados.")
@@ -50,7 +68,7 @@ class OddsClient:
                 "markets": config.ODDS_MARKETS,
                 "oddsFormat": config.ODDS_FORMAT,
             }
-            response = requests.get(url, params=params, timeout=15)
+            response = self.session.get(url, params=params, timeout=15)
             response.raise_for_status()
 
             raw_data = response.json()

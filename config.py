@@ -13,6 +13,7 @@ ODDS_API_KEY = os.getenv("ODDS_API_KEY", "")
 FOOTBALL_API_KEY = os.getenv("FOOTBALL_API_KEY", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+DASHBOARD_API_KEY = os.getenv("DASHBOARD_API_KEY", "")
 
 # ── The Odds API ──────────────────────────────────────────
 ODDS_API_BASE = "https://api.the-odds-api.com/v4"
