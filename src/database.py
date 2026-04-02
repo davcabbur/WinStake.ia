@@ -86,6 +86,15 @@ class Database:
                     recorded_at         TEXT NOT NULL,
                     FOREIGN KEY (value_bet_id) REFERENCES value_bets(id)
                 );
+
+                CREATE INDEX IF NOT EXISTS idx_analyses_date_teams
+                    ON analyses(run_date, home_team, away_team);
+
+                CREATE INDEX IF NOT EXISTS idx_value_bets_analysis
+                    ON value_bets(analysis_id);
+
+                CREATE INDEX IF NOT EXISTS idx_match_results_bet
+                    ON match_results(value_bet_id);
             """)
             conn.commit()
             logger.info(f"✅ Base de datos inicializada en {self.db_path}")

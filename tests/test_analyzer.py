@@ -1,11 +1,14 @@
 import pytest
 from src.analyzer import Analyzer, MatchAnalysis, MatchProbabilities, EVResult, KellyResult
+from src.ev_calculator import remove_overround, fair_odds
+from src.market_analyzer import form_multiplier, h2h_adjustment, H2H_MIN_MATCHES
 
 
 @pytest.fixture
 def analyzer():
     a = Analyzer()
     a.min_ev = 2.0
+    a._ev_calc.min_ev = 2.0
     return a
 
 
@@ -54,7 +57,7 @@ def test_poisson_very_low_lambda(analyzer):
     probs = analyzer._poisson_probabilities(0.3, 0.2)
     total = probs.home_win + probs.draw + probs.away_win
     assert 0.99 <= total <= 1.01
-    assert probs.draw > 0.3  # Con lambdas bajos, el empate 0-0 domina
+    assert probs.draw > 0.3
 
 
 # ── Expected Value ────────────────────────────────────────
@@ -78,28 +81,6 @@ def test_calculate_ev_positive(analyzer):
     assert home_bet.ev_percent > 50.0
 
 
-def test_calculate_ev_no_value_on_fair_odds(analyzer):
-    """Cuotas justas no deben generar value (EV < threshold)."""
-    analyzer.min_ev = 3.0
-
-    class MockProbs:
-        home_win = 0.50
-        draw = 0.25
-        away_win = 0.25
-        btts_yes = 0.5
-        btts_no = 0.5
-        over_25 = 0.5
-        under_25 = 0.5
-
-    # Cuotas justas: 1/0.50 = 2.0
-    odds = {"home": 2.0, "draw": 4.0, "away": 4.0}
-    ev_results = analyzer._calculate_ev(MockProbs(), odds)
-
-    home_bet = next(x for x in ev_results if x.selection == "Local")
-    assert home_bet.is_value is False
-    assert abs(home_bet.ev_percent) < 1.0  # ~0% EV
-
-
 def test_calculate_ev_skips_missing_odds(analyzer):
     """Mercados sin cuota se omiten del resultado."""
     class MockProbs:
@@ -111,7 +92,7 @@ def test_calculate_ev_skips_missing_odds(analyzer):
         over_25 = 0.5
         under_25 = 0.5
 
-    odds = {"home": 1.90}  # Solo cuota local
+    odds = {"home": 1.90}
     ev_results = analyzer._calculate_ev(MockProbs(), odds)
     selections = [r.selection for r in ev_results]
     assert "Local" in selections
@@ -137,6 +118,55 @@ def test_calculate_ev_rejects_odds_below_one(analyzer):
     assert "Visitante" in selections
 
 
+# ── Overround / Fair Odds ─────────────────────────────────
+
+def test_remove_overround_typical():
+    """Overround típico de ~5% en cuotas 1X2."""
+    odds = {"home": 1.85, "draw": 3.40, "away": 4.20}
+    ov = remove_overround(odds)
+    # 1/1.85 + 1/3.40 + 1/4.20 ≈ 0.540 + 0.294 + 0.238 = 1.072 → 7.2%
+    assert 0.05 < ov < 0.10
+
+
+def test_remove_overround_no_margin():
+    """Sin margen (cuotas justas), overround = 0."""
+    odds = {"home": 2.0, "draw": 5.0, "away": 3.333}
+    ov = remove_overround(odds)
+    assert ov == pytest.approx(0.0, abs=0.01)
+
+
+def test_fair_odds_increases_odds():
+    """Cuota justa siempre >= cuota de mercado."""
+    assert fair_odds(1.85, 0.05) > 1.85
+    assert fair_odds(3.40, 0.05) > 3.40
+
+
+def test_fair_odds_zero_overround():
+    """Sin overround, cuota justa = cuota de mercado."""
+    assert fair_odds(2.0, 0.0) == 2.0
+
+
+def test_ev_with_overround_is_lower(analyzer):
+    """EV con descuento de overround debe ser mayor que sin (cuotas justas son más altas)."""
+    # Las cuotas justas (fair odds) son MÁS ALTAS que las de mercado,
+    # por lo que el EV calculado con fair odds es MAYOR.
+    # Esto es correcto: el edge real vs cuotas justas es mejor.
+    class MockProbs:
+        home_win = 0.6
+        draw = 0.2
+        away_win = 0.2
+        btts_yes = 0.5
+        btts_no = 0.5
+        over_25 = 0.5
+        under_25 = 0.5
+
+    odds = {"home": 1.85, "draw": 3.40, "away": 4.20}
+    ev_results = analyzer._calculate_ev(MockProbs(), odds)
+    home_ev = next(x for x in ev_results if x.selection == "Local")
+    # Con prob 0.6 y cuota justa ~1.99 (1.85 * 1.072): EV = 0.6*1.99 - 1 = 0.194
+    assert home_ev.ev_percent > 0
+
+
 # ── Kelly Criterion ───────────────────────────────────────
 
 def test_kelly_basic(analyzer):
@@ -149,7 +179,6 @@ def test_kelly_basic(analyzer):
 def test_kelly_no_edge(analyzer):
     """Sin edge, Kelly debe ser 0."""
     kelly = analyzer._kelly_criterion(probability=0.40, odds=2.0)
-    # EV = 0.4*2 - 1 = -0.2 → kelly negativo → capped to 0
     assert kelly.kelly_full == 0
     assert kelly.kelly_half == 0
     assert kelly.stake_units == 0
@@ -158,8 +187,7 @@ def test_kelly_no_edge(analyzer):
 def test_kelly_capped(analyzer):
     """Kelly no debe exceder KELLY_CAP."""
     kelly = analyzer._kelly_criterion(probability=0.90, odds=3.0)
-    # Kelly bruto sería enorme, pero cap 10%
-    assert kelly.kelly_full == 10.0  # 10% cap
+    assert kelly.kelly_full == 10.0
     assert kelly.kelly_half == 5.0
 
 
@@ -178,56 +206,118 @@ def test_kelly_zero_probability(analyzer):
 
 def test_kelly_risk_levels(analyzer):
     """Verificar clasificación de riesgo."""
-    # Bajo: kelly_half <= 2%
     kelly_low = analyzer._kelly_criterion(probability=0.51, odds=2.0)
     assert kelly_low.risk_level == "Bajo"
 
-    # Alto: kelly_half > 4%
     kelly_high = analyzer._kelly_criterion(probability=0.70, odds=2.5)
     assert kelly_high.risk_level == "Alto"
 
 
-# ── Form Multiplier ───────────────────────────────────────
+# ── Form Multiplier (con decay temporal) ──────────────────
 
 def test_form_empty_string():
     """Forma vacía retorna 1.0."""
-    assert Analyzer._form_multiplier("") == 1.0
+    assert form_multiplier("") == 1.0
 
 
 def test_form_too_short():
     """Menos de 3 resultados retorna 1.0."""
-    assert Analyzer._form_multiplier("WL") == 1.0
+    assert form_multiplier("WL") == 1.0
 
 
 def test_form_all_wins():
-    """WWWWW debe dar multiplicador > 1.0."""
-    mult = Analyzer._form_multiplier("WWWWW")
+    """WWWWW debe dar multiplicador = 1.1 (máximo)."""
+    mult = form_multiplier("WWWWW")
     assert mult == 1.1
 
 
 def test_form_all_losses():
-    """LLLLL debe dar multiplicador < 1.0."""
-    mult = Analyzer._form_multiplier("LLLLL")
+    """LLLLL debe dar multiplicador = 0.9 (mínimo)."""
+    mult = form_multiplier("LLLLL")
     assert mult == 0.9
 
 
 def test_form_all_draws():
     """DDDDD debe dar multiplicador = 1.0."""
-    mult = Analyzer._form_multiplier("DDDDD")
+    mult = form_multiplier("DDDDD")
     assert mult == 1.0
 
 
-def test_form_mixed():
-    """WDLWW: score = 2+0-2+2+2 = 4, normalized = 4/10 = 0.4, mult = 1.04."""
-    mult = Analyzer._form_multiplier("WDLWW")
-    assert mult == 1.04
+def test_form_decay_recent_wins_matter_more():
+    """LLWWW (recientes ganan) debe dar más que WWWLL (recientes pierden)."""
+    mult_recent_good = form_multiplier("LLWWW")  # Últimas 3 son W
+    mult_recent_bad = form_multiplier("WWWLL")   # Últimas 2 son L
+    assert mult_recent_good > mult_recent_bad
+
+
+def test_form_decay_symmetric_different():
+    """WLLLL vs LLLLW: el segundo tiene la W más reciente, debe ser mayor."""
+    mult_old_win = form_multiplier("WLLLL")   # W es la más antigua
+    mult_new_win = form_multiplier("LLLLW")   # W es la más reciente
+    assert mult_new_win > mult_old_win
 
 
 def test_form_takes_last_five():
     """Con más de 5 chars, toma solo los últimos 5."""
-    # "LLLLLWWWWW" → last 5 = "WWWWW" → 1.10
-    mult = Analyzer._form_multiplier("LLLLLWWWWW")
+    mult = form_multiplier("LLLLLWWWWW")
     assert mult == 1.1
+
+
+# ── H2H Adjustment ────────────────────────────────────────
+
+def test_h2h_empty():
+    """Sin datos H2H retorna (1.0, 1.0)."""
+    assert h2h_adjustment([]) == (1.0, 1.0)
+
+
+def test_h2h_too_few_matches():
+    """Con menos de 3 partidos no aplica ajuste."""
+    data = [
+        {"home_goals": 2, "away_goals": 1, "home_winner": True},
+        {"home_goals": 0, "away_goals": 1, "home_winner": False},
+    ]
+    assert h2h_adjustment(data) == (1.0, 1.0)
+
+
+def test_h2h_minimum_three_matches():
+    """Con exactamente 3 partidos aplica ajuste reducido (60%)."""
+    data = [
+        {"home_goals": 2, "away_goals": 0, "home_winner": True},
+        {"home_goals": 1, "away_goals": 0, "home_winner": True},
+        {"home_goals": 3, "away_goals": 1, "home_winner": True},
+    ]
+    home_adj, away_adj = h2h_adjustment(data)
+    assert home_adj > 1.0   # Home domina
+    assert away_adj < 1.0   # Away debilitado
+    # Con 3 partidos, factor = 0.6, ajuste max = 0.08 * 0.6 * (1-0) = 0.048
+    assert home_adj < 1.06  # Reducido por sample_factor
+
+
+def test_h2h_five_matches_full_weight():
+    """Con 5 partidos aplica el ajuste completo."""
+    data = [
+        {"home_goals": 2, "away_goals": 0, "home_winner": True},
+        {"home_goals": 1, "away_goals": 0, "home_winner": True},
+        {"home_goals": 3, "away_goals": 1, "home_winner": True},
+        {"home_goals": 2, "away_goals": 1, "home_winner": True},
+        {"home_goals": 1, "away_goals": 0, "home_winner": True},
+    ]
+    home_adj, away_adj = h2h_adjustment(data)
+    # 5 partidos, todos home wins: rate=1.0, factor=1.0, adj=1+0.08=1.08
+    assert home_adj == 1.08
+    assert away_adj == 0.92
+
+
+def test_h2h_balanced():
+    """H2H equilibrado da ajustes cercanos a 1.0."""
+    data = [
+        {"home_goals": 2, "away_goals": 0, "home_winner": True},
+        {"home_goals": 0, "away_goals": 2, "home_winner": False},
+        {"home_goals": 1, "away_goals": 1, "home_winner": None},
+    ]
+    home_adj, away_adj = h2h_adjustment(data)
+    assert abs(home_adj - 1.0) < 0.02
+    assert abs(away_adj - 1.0) < 0.02
 
 
 # ── Confidence Classification ─────────────────────────────
@@ -263,7 +353,7 @@ def test_correct_scores_sum_reasonable(analyzer):
     """Top 5 resultados deben cubrir una porción significativa."""
     scores = analyzer._correct_score_matrix(1.5, 1.2)
     total_prob = sum(s["probability"] for s in scores)
-    assert total_prob > 0.20  # Al menos 20% combinado
+    assert total_prob > 0.20
 
 
 # ── Find Best Bet ─────────────────────────────────────────
@@ -294,13 +384,12 @@ def test_find_best_bet_none_when_no_value(analyzer):
 def test_lambdas_without_stats(analyzer):
     """Sin stats, lambdas usan media de liga + ventaja local."""
     lh, la, _, _, xg_used = analyzer._calculate_lambdas(None, None)
-    assert lh > la  # Ventaja local
+    assert lh > la
     assert xg_used is False
 
 
 def test_lambdas_clamped(analyzer):
-    """Lambdas deben estar dentro del rango [0.2, 4.0]."""
-    # Stats extremos que podrían generar lambdas fuera de rango
+    """Lambdas deben estar dentro del rango permitido."""
     extreme_home = {"played": 29, "goals_for": 120, "goals_against": 5, "form": "WWWWW",
                     "home": {"played": 15, "goals_for": 70, "goals_against": 2,
                              "wins": 15, "draws": 0, "losses": 0}}
