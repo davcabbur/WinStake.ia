@@ -72,12 +72,13 @@ class EVCalculator:
     def calculate_ev(self, probs: MatchProbabilities, odds: dict) -> list[EVResult]:
         """
         Calcula EV para cada resultado posible.
-        Descuenta el overround del bookmaker para no sobreestimar el edge.
+
+        Usa las cuotas reales de mercado (lo que realmente cobras) para
+        el cálculo de EV, no las cuotas justas infladas.
+
+        EV = (probabilidad_real × cuota_mercado) - 1
         """
         results = []
-
-        # Calcular overround del mercado 1X2
-        overround = remove_overround(odds)
 
         outcomes = [
             ("Local", probs.home_win, odds.get("home")),
@@ -89,18 +90,18 @@ class EVCalculator:
             ("BTTS No", probs.btts_no, odds.get("btts_no")),
         ]
 
+        # min_ev está en fracción (0.03 = 3%), ev también en fracción
         for name, prob, odd in outcomes:
             if odd and odd > 1.0:
-                # Usar cuota justa (sin margen) para el cálculo de EV
-                fair = fair_odds(odd, overround)
-                ev = (prob * fair) - 1.0
+                ev = (prob * odd) - 1.0
+                ev_percent = round(ev * 100, 2)
                 results.append(EVResult(
                     selection=name,
                     probability=round(prob, 4),
                     odds=odd,
                     ev=round(ev, 4),
-                    ev_percent=round(ev * 100, 2),
-                    is_value=bool((ev * 100) >= self.min_ev),
+                    ev_percent=ev_percent,
+                    is_value=bool(ev >= self.min_ev),
                 ))
 
         return results

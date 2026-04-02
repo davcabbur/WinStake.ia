@@ -7,8 +7,8 @@ from src.market_analyzer import form_multiplier, h2h_adjustment, H2H_MIN_MATCHES
 @pytest.fixture
 def analyzer():
     a = Analyzer()
-    a.min_ev = 2.0
-    a._ev_calc.min_ev = 2.0
+    a.min_ev = 0.02       # 2% threshold (fracción)
+    a._ev_calc.min_ev = 0.02
     return a
 
 
@@ -146,11 +146,8 @@ def test_fair_odds_zero_overround():
     assert fair_odds(2.0, 0.0) == 2.0
 
 
-def test_ev_with_overround_is_lower(analyzer):
-    """EV con descuento de overround debe ser mayor que sin (cuotas justas son más altas)."""
-    # Las cuotas justas (fair odds) son MÁS ALTAS que las de mercado,
-    # por lo que el EV calculado con fair odds es MAYOR.
-    # Esto es correcto: el edge real vs cuotas justas es mejor.
+def test_ev_uses_real_market_odds(analyzer):
+    """EV se calcula con las cuotas reales de mercado (lo que cobras)."""
     class MockProbs:
         home_win = 0.6
         draw = 0.2
@@ -163,8 +160,9 @@ def test_ev_with_overround_is_lower(analyzer):
     odds = {"home": 1.85, "draw": 3.40, "away": 4.20}
     ev_results = analyzer._calculate_ev(MockProbs(), odds)
     home_ev = next(x for x in ev_results if x.selection == "Local")
-    # Con prob 0.6 y cuota justa ~1.99 (1.85 * 1.072): EV = 0.6*1.99 - 1 = 0.194
-    assert home_ev.ev_percent > 0
+    # EV = prob * odds - 1 = 0.6 * 1.85 - 1 = 0.11 (11%)
+    assert home_ev.ev_percent == pytest.approx(11.0, abs=0.5)
+    assert home_ev.is_value is True
 
 
 # ── Kelly Criterion ───────────────────────────────────────

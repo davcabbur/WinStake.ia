@@ -1,4 +1,3 @@
-import sys
 import logging
 from fastapi import APIRouter, HTTPException
 
@@ -9,6 +8,7 @@ from src.analyzer import Analyzer
 
 router = APIRouter()
 logger = logging.getLogger("WinStakeAPI")
+
 
 @router.get("/")
 def get_analysis_results():
@@ -41,7 +41,7 @@ def get_analysis_results():
                 away_stats=away_stats,
                 commence_time=match.get("commence_time", ""),
             )
-            
+
             # Solo devolver las apuestas con valor para el frontend
             if analysis.best_bet and analysis.best_bet.is_value:
                 analyses.append({
@@ -50,11 +50,16 @@ def get_analysis_results():
                     "selection": analysis.best_bet.selection,
                     "odds": analysis.best_bet.odds,
                     "ev_percent": analysis.best_bet.ev_percent,
-                    "recommended_stake": analysis.best_bet.recommended_stake
+                    "probability": analysis.best_bet.probability,
+                    "kelly_half": analysis.kelly.kelly_half if analysis.kelly else 0,
+                    "stake_units": analysis.kelly.stake_units if analysis.kelly else 0,
+                    "confidence": analysis.confidence,
                 })
 
         return {"status": "success", "value_bets": analyses, "total_analyzed": len(matches_odds)}
 
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error executing analysis: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error executing analysis: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
