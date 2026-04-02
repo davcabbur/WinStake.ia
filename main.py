@@ -49,6 +49,17 @@ def parse_args():
         action="store_true",
         help="Activar logging en modo DEBUG",
     )
+    parser.add_argument(
+        "--verify",
+        action="store_true",
+        help="Verificar resultados de value bets pendientes y salir",
+    )
+    parser.add_argument(
+        "--backtest",
+        type=int,
+        metavar="SEASON",
+        help="Ejecutar backtest en una temporada (ej: 23 para 2023/24)",
+    )
     return parser.parse_args()
 
 
@@ -89,6 +100,38 @@ def main():
 
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
+
+    # Modo verificación
+    if args.verify:
+        from src.result_verifier import verify_results
+        logger.info("🔍 Verificando resultados pendientes...")
+        verify_results()
+        return
+
+    # Modo backtest
+    if args.backtest is not None:
+        from src.backtester.engine import run_backtest
+        from src.calibration import print_calibration_report
+        logger.info(f"📊 Ejecutando backtest temporada {args.backtest}...")
+        result = run_backtest(season=args.backtest)
+        logger.info(f"\n{'='*50}")
+        logger.info(f"ROI: {result.roi_percent:+.2f}%")
+        logger.info(f"Bets: {result.total_bets} ({result.wins}W-{result.losses}L)")
+        logger.info(f"Win Rate: {result.win_rate:.1f}%")
+        logger.info(f"Bankroll: {result.initial_bankroll} → {result.final_bankroll:.1f}")
+        logger.info(f"Max Drawdown: {result.max_drawdown:.1f}%")
+        logger.info(f"Racha perdedora más larga: {result.longest_losing_streak}")
+        logger.info(f"Odds promedio: {result.avg_odds:.2f}")
+        logger.info(f"EV promedio: {result.avg_ev:.1f}%")
+        if result.profit_by_market:
+            logger.info(f"\nProfit por mercado:")
+            for mkt, profit in sorted(result.profit_by_market.items(), key=lambda x: x[1], reverse=True):
+                info = result.bets_by_market[mkt]
+                logger.info(f"  {mkt}: {profit:+.1f}u ({info['wins']}/{info['total']} wins)")
+        if result.predictions:
+            logger.info(f"\n{'='*50}")
+            print_calibration_report(result.predictions)
+        return
 
     start_time = datetime.now()
     logger.info("🚀 WinStake.ia iniciando análisis...")
