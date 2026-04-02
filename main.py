@@ -23,7 +23,7 @@ from src.logger_config import setup_logging
 logger = setup_logging("WinStake")
 
 
-def parse_args():
+def parse_args(args=None):
     """Parsea argumentos de línea de comandos."""
     parser = argparse.ArgumentParser(
         description="WinStake.ia — Análisis cuantitativo de apuestas La Liga",
@@ -60,7 +60,7 @@ def parse_args():
         metavar="SEASON",
         help="Ejecutar backtest en una temporada (ej: 23 para 2023/24)",
     )
-    return parser.parse_args()
+    return parser.parse_args(args)
 
 
 def export_csv(analyses: list, filepath: str):
@@ -94,9 +94,15 @@ def export_csv(analyses: list, filepath: str):
     logger.info(f"📄 Resultados exportados a {filepath}")
 
 
-def main():
-    """Flujo principal de WinStake.ia."""
-    args = parse_args()
+def main(cli_args: list = None):
+    """
+    Flujo principal de WinStake.ia.
+
+    Args:
+        cli_args: Lista de argumentos CLI. Si es None, usa sys.argv.
+                  Pasar [] desde bot_daemon para usar defaults.
+    """
+    args = parse_args() if cli_args is None else parse_args(cli_args)
 
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
@@ -157,7 +163,7 @@ def main():
 
     if not matches_odds:
         logger.error("❌ No se obtuvieron partidos. Verifica tu ODDS_API_KEY.")
-        sys.exit(1)
+        raise RuntimeError("No se obtuvieron partidos. Verifica tu ODDS_API_KEY.")
 
     logger.info(f"   → {len(matches_odds)} partidos con cuotas")
 
@@ -259,7 +265,7 @@ def main():
         logger.info(f"\n✅ Análisis completado en {elapsed:.1f}s")
     else:
         logger.error(f"\n❌ Error en el envío. Tiempo: {elapsed:.1f}s")
-        sys.exit(1)
+        raise RuntimeError("Error en el envío a Telegram")
 
 
 if __name__ == "__main__":

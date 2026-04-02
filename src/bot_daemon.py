@@ -59,15 +59,19 @@ async def roi_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def analizar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Lanza el análisis del modelo de predicción (bloqueante manejado en thread para no colgar asyncio)."""
     await update.message.reply_text("⏳ Iniciando análisis cuantitativo de las ligas configuradas. Esto puede tardar unos segundos...")
-    
+
     try:
         # Ejecutamos 'run_analysis' en un hilo separado para no bloquear el loop del bot
+        # Pasamos [] como args para evitar que argparse lea sys.argv del daemon
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, run_analysis)
+        await loop.run_in_executor(None, lambda: run_analysis([]))
         # Nota: main() ya se encarga de formatear y enviar los resultados de vuelta a Telegram si hay value.
         await update.message.reply_text("✅ Análisis completado. (Si no recibes pronósticos, es que no hay value bets reales)")
+    except (SystemExit, RuntimeError) as e:
+        logger.error(f"Error en análisis: {e}")
+        await update.message.reply_text(f"⚠️ Análisis finalizado con error: {e}")
     except Exception as e:
-        logger.error(f"Error forzando análisis: {e}")
+        logger.error(f"Error forzando análisis: {e}", exc_info=True)
         await update.message.reply_text("❌ Hubo un error ejecutando el modelo matemático. Revisa los logs.")
 
 

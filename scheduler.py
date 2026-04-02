@@ -44,7 +44,7 @@ def safe_run():
         logger.info("⏰ Ejecución programada iniciada")
         logger.info(f"📅 {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
         logger.info("=" * 50)
-        run_analysis()
+        run_analysis([])
         logger.info("✅ Ejecución programada completada correctamente\n")
     except Exception as e:
         logger.error(f"❌ Error en ejecución programada: {e}\n", exc_info=True)
