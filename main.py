@@ -172,6 +172,9 @@ def main(cli_args: list = None):
     standings = football_client.get_standings()
     logger.info(f"   → {len(standings)} equipos en clasificación")
 
+    # Recalibrar media de goles desde datos reales
+    analyzer.calibrate_from_standings(standings)
+
     # ── 4. Obtener goleadores ───────────────────────────
     logger.info("⚽ Obteniendo goleadores de La Liga...")
     scorers = football_client.get_top_scorers()

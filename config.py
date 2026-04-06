@@ -29,9 +29,9 @@ LA_LIGA_ID = 140              # ID de La Liga en API-Football
 CURRENT_SEASON = 2025         # Temporada 2025-26
 
 # ── Parámetros del modelo ─────────────────────────────────
-HOME_ADVANTAGE = 0.25         # Bonus λ para equipo local
-FORM_WEIGHT = 0.40            # Peso de últimos 5 partidos vs temporada
-LEAGUE_AVG_GOALS = 2.65       # Media de goles por partido La Liga
+HOME_ADVANTAGE = 0.18         # Bonus λ para equipo local (La Liga post-COVID: ~0.15-0.20)
+FORM_WEIGHT = 0.25            # Peso base de últimos 5 partidos (se reduce con más jornadas)
+LEAGUE_AVG_GOALS = 2.65       # Media de goles por partido La Liga (se recalcula dinámicamente)
 MAX_GOALS_MODEL = 6           # Máximo de goles a modelar por equipo
 
 # ── Bankroll ──────────────────────────────────────────────

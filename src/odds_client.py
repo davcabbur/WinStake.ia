@@ -7,6 +7,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import logging
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 import config
@@ -77,6 +78,10 @@ class OddsClient:
 
             parsed = self._parse_odds(raw_data)
 
+            # Filtrar solo partidos de la próxima jornada (7 días)
+            parsed = self._filter_next_matchday(parsed)
+            logger.info(f"📅 Tras filtro de jornada: {len(parsed)} partidos")
+
             # Guardar en caché
             self.cache.set(cache_key, parsed)
             logger.info(f"💾 Cuotas guardadas en caché (TTL: {config.CACHE_TTL_ODDS // 60}min)")
@@ -93,6 +98,53 @@ class OddsClient:
         except requests.exceptions.RequestException as e:
             logger.error(f"❌ Odds API connection error: {e}")
             return []
+
+    @staticmethod
+    def _filter_next_matchday(matches: list[dict], window_days: int = 7) -> list[dict]:
+        """
+        Filtra partidos para mostrar solo la próxima jornada.
+
+        Estrategia: toma el primer partido (más cercano) y agrupa todos los
+        que caen dentro de 4 días desde ese primero. Una jornada de La Liga
+        se juega entre viernes y lunes (4 días máximo).
+        """
+        if not matches:
+            return matches
+
+        now = datetime.now(timezone.utc)
+        cutoff = now + timedelta(days=window_days)
+
+        # 1. Filtrar partidos futuros dentro de la ventana
+        future = []
+        for m in matches:
+            ct = m.get("commence_time", "")
+            if not ct:
+                continue
+            try:
+                dt = datetime.fromisoformat(ct.replace("Z", "+00:00"))
+                if now - timedelta(hours=2) <= dt <= cutoff:
+                    m["_dt"] = dt
+                    future.append(m)
+            except (ValueError, TypeError):
+                continue
+
+        if not future:
+            return matches  # Fallback: devolver todo
+
+        # 2. Ordenar por fecha
+        future.sort(key=lambda m: m["_dt"])
+
+        # 3. Agrupar jornada: desde el primer partido, tomar todos dentro de 4 días
+        first_dt = future[0]["_dt"]
+        matchday_end = first_dt + timedelta(days=4)
+
+        result = []
+        for m in future:
+            if m["_dt"] <= matchday_end:
+                m.pop("_dt", None)
+                result.append(m)
+
+        return result
 
     def _parse_odds(self, raw_data: list[dict]) -> list[dict]:
         """Parsea respuesta de la API y calcula cuotas promedio por resultado."""

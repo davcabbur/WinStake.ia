@@ -43,10 +43,13 @@ def _run_analysis_for_jornada() -> dict:
     # 2. Obtener clasificación
     standings = football_client.get_standings()
 
-    # 3. Obtener goleadores
+    # 3. Recalibrar modelo con datos reales
+    analyzer.calibrate_from_standings(standings)
+
+    # 4. Obtener goleadores
     scorers = football_client.get_top_scorers()
 
-    # 4. Analizar cada partido
+    # 5. Analizar cada partido
     analyses = {}
     for match in matches_odds:
         home = match["home_team"]

@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Optional
 
 from src.analyzer import MatchAnalysis
+from src.ev_calculator import EVCalculator, KellyResult
 
 logger = logging.getLogger(__name__)
 
@@ -146,9 +147,12 @@ class Database:
 
             analysis_id = cursor.lastrowid
 
-            # Guardar value bets asociadas
-            if analysis.best_bet and analysis.best_bet.is_value:
-                kelly = analysis.kelly
+            # Guardar TODAS las value bets del partido
+            for ev in analysis.ev_results:
+                if not ev.is_value:
+                    continue
+                kelly = self._ev_calc_kelly(ev.probability, ev.odds)
+                confidence = self._classify_ev(ev.ev_percent)
                 conn.execute("""
                     INSERT INTO value_bets (
                         analysis_id, selection, probability, odds,
@@ -156,14 +160,14 @@ class Database:
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     analysis_id,
-                    analysis.best_bet.selection,
-                    analysis.best_bet.probability,
-                    analysis.best_bet.odds,
-                    analysis.best_bet.ev_percent,
-                    kelly.kelly_full if kelly else 0,
-                    kelly.kelly_half if kelly else 0,
-                    kelly.stake_units if kelly else 0,
-                    analysis.confidence,
+                    ev.selection,
+                    ev.probability,
+                    ev.odds,
+                    ev.ev_percent,
+                    kelly.kelly_full,
+                    kelly.kelly_half,
+                    kelly.stake_units,
+                    confidence,
                 ))
 
             conn.commit()
@@ -227,19 +231,59 @@ class Database:
             conn.close()
 
     @staticmethod
+    def _ev_calc_kelly(probability: float, odds: float) -> KellyResult:
+        """Calcula Kelly para una value bet individual."""
+        return EVCalculator().kelly_criterion(probability, odds)
+
+    @staticmethod
+    def _classify_ev(ev_percent: float) -> str:
+        return EVCalculator.classify_confidence(ev_percent)
+
+    @staticmethod
     def _check_bet_won(selection: str, home_goals: int, away_goals: int) -> bool:
         """Determina si una apuesta ganó basándose en el resultado real."""
-        sel = selection.lower()
+        sel = selection.lower().strip()
+        total = home_goals + away_goals
+        home_win = home_goals > away_goals
+        draw = home_goals == away_goals
+        away_win = home_goals < away_goals
+
+        # 1X2
         if sel == "local":
-            return home_goals > away_goals
+            return home_win
         elif sel == "empate":
-            return home_goals == away_goals
+            return draw
         elif sel == "visitante":
-            return home_goals < away_goals
+            return away_win
+
+        # Doble Oportunidad
+        elif sel == "1x":
+            return home_win or draw
+        elif sel == "x2":
+            return draw or away_win
+        elif sel == "12":
+            return home_win or away_win
+
+        # Over/Under
+        elif sel == "over 1.5":
+            return total > 1
+        elif sel == "under 1.5":
+            return total < 2
         elif sel == "over 2.5":
-            return (home_goals + away_goals) > 2
+            return total > 2
         elif sel == "under 2.5":
-            return (home_goals + away_goals) < 3
+            return total < 3
+        elif sel == "over 3.5":
+            return total > 3
+        elif sel == "under 3.5":
+            return total < 4
+
+        # BTTS
+        elif sel in ("btts sí", "btts si"):
+            return home_goals >= 1 and away_goals >= 1
+        elif sel == "btts no":
+            return home_goals == 0 or away_goals == 0
+
         return False
 
     # ── Consultas de ROI ──────────────────────────────────────

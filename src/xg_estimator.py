@@ -24,7 +24,7 @@ XG_RATE_ON_TARGET = 0.33       # 33% de los tiros a puerta son gol
 XG_RATE_BLOCKED = 0.02         # 2% de los tiros bloqueados (rebote/desvío)
 
 # Peso para mezclar xG con goles reales en el modelo
-XG_WEIGHT = 0.65               # 65% xG, 35% goles reales
+XG_WEIGHT = 0.50               # 50% xG, 50% goles reales (equilibrado para >25 jornadas)
 
 
 class XGEstimator:

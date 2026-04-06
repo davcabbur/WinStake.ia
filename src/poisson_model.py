@@ -60,6 +60,46 @@ class PoissonModel:
         self.league_avg_goals = config.LEAGUE_AVG_GOALS
         self.max_goals = config.MAX_GOALS_MODEL
 
+    def update_league_avg_from_standings(self, standings: list[dict]) -> None:
+        """
+        Recalcula LEAGUE_AVG_GOALS desde los datos reales de la clasificación.
+        Más preciso que un hardcode estático.
+        """
+        if not standings:
+            return
+        total_goals = sum(t.get("goals_for", 0) for t in standings)
+        total_played = sum(t.get("played", 0) for t in standings)
+        if total_played > 0:
+            # Cada partido tiene 2 equipos, así que total_goals ya es la suma de GF de todos
+            # pero cada gol se cuenta dos veces (GF de un equipo = GA de otro)
+            # total_matches = total_played / 2
+            total_matches = total_played / 2
+            real_avg = total_goals / total_matches
+            if 1.5 < real_avg < 4.0:  # Sanity check
+                old = self.league_avg_goals
+                self.league_avg_goals = round(real_avg, 2)
+                if abs(old - real_avg) > 0.1:
+                    logger.info(
+                        f"📊 LEAGUE_AVG_GOALS actualizado: {old} → {self.league_avg_goals} "
+                        f"(calculado de {len(standings)} equipos, {int(total_matches)} partidos)"
+                    )
+
+    def dynamic_form_weight(self, matches_played: int) -> float:
+        """
+        Reduce el peso de la forma reciente conforme avanza la temporada.
+        Con pocas jornadas, la forma reciente es más relevante.
+        Con muchas jornadas, los datos de temporada son más robustos.
+
+        J5: form_weight ≈ 0.35 (forma importa mucho)
+        J15: form_weight ≈ 0.25 (equilibrado)
+        J30: form_weight ≈ 0.15 (temporada domina)
+        """
+        if matches_played <= 0:
+            return self.form_weight
+        # Decae linealmente: base_weight * (1 - played/50)
+        decay = max(0.10, self.form_weight * (1 - matches_played / 50))
+        return round(decay, 3)
+
     def calculate_lambdas(
         self,
         home_stats: Optional[dict],
@@ -128,13 +168,15 @@ class PoissonModel:
                     f"goals:{home_attack * away_defense * avg_goals_per_team:.2f})"
                 )
             else:
+                # Form weight dinámico: menos peso a la forma con más partidos jugados
+                dyn_fw = self.dynamic_form_weight(home_played)
                 if "home" in home_stats and home_stats["home"]["played"] > 0:
                     home_home_gf = home_stats["home"]["goals_for"] / home_stats["home"]["played"]
-                    lambda_home = lambda_home * (1 - self.form_weight) + home_home_gf * self.form_weight
+                    lambda_home = lambda_home * (1 - dyn_fw) + home_home_gf * dyn_fw
 
                 if "away" in away_stats and away_stats["away"]["played"] > 0:
                     away_away_gf = away_stats["away"]["goals_for"] / away_stats["away"]["played"]
-                    lambda_away = lambda_away * (1 - self.form_weight) + away_away_gf * self.form_weight
+                    lambda_away = lambda_away * (1 - dyn_fw) + away_away_gf * dyn_fw
 
         else:
             lambda_home = avg_goals_per_team * (1 + self.home_advantage)
@@ -143,10 +185,15 @@ class PoissonModel:
         lambda_home = max(0.3, min(4.0, lambda_home))
         lambda_away = max(0.2, min(3.5, lambda_away))
 
-        # Ajuste por Forma Reciente
+        # Ajuste por Forma Reciente (atenuado según jornada)
         if home_stats and away_stats and form_multiplier_fn:
             home_form_mult = form_multiplier_fn(home_stats.get("form", ""))
             away_form_mult = form_multiplier_fn(away_stats.get("form", ""))
+            # Atenuar el efecto con más partidos jugados (regresión a la media)
+            played = home_stats.get("played", 29) or 29
+            attenuation = max(0.4, 1.0 - played / 50)  # J10: 0.8, J25: 0.5, J38: 0.4
+            home_form_mult = 1.0 + (home_form_mult - 1.0) * attenuation
+            away_form_mult = 1.0 + (away_form_mult - 1.0) * attenuation
             if home_form_mult != 1.0 or away_form_mult != 1.0:
                 lambda_home *= home_form_mult
                 lambda_away *= away_form_mult

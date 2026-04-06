@@ -115,23 +115,9 @@ class TeamStatsTracker:
 
 
 def _check_bet_won(selection: str, home_goals: int, away_goals: int) -> bool:
-    """Evalúa si una apuesta fue ganadora."""
-    sel = selection.lower()
-    if sel == "local":
-        return home_goals > away_goals
-    elif sel == "empate":
-        return home_goals == away_goals
-    elif sel == "visitante":
-        return home_goals < away_goals
-    elif sel == "over 2.5":
-        return (home_goals + away_goals) > 2
-    elif sel == "under 2.5":
-        return (home_goals + away_goals) < 3
-    elif sel == "btts sí":
-        return home_goals > 0 and away_goals > 0
-    elif sel == "btts no":
-        return home_goals == 0 or away_goals == 0
-    return False
+    """Evalúa si una apuesta fue ganadora. Delega a Database._check_bet_won."""
+    from src.database import Database
+    return Database._check_bet_won(selection, home_goals, away_goals)
 
 
 @dataclass

@@ -58,6 +58,10 @@ class Analyzer:
         self._poisson = PoissonModel()
         self._ev_calc = EVCalculator()
 
+    def calibrate_from_standings(self, standings: list[dict]) -> None:
+        """Recalibra la media de goles de la liga desde datos reales."""
+        self._poisson.update_league_avg_from_standings(standings)
+
     def analyze_match(
         self,
         home_team: str,
@@ -156,21 +160,27 @@ class Analyzer:
     def _is_derby(home: str, away: str) -> bool:
         """Detecta si es un derby/clásico con mayor intensidad."""
         derbies = [
-            {"real madrid", "barcelona"},
-            {"real madrid", "atlético madrid"},
-            {"barcelona", "atlético madrid"},
-            {"real betis", "sevilla"},
-            {"valencia", "levante"},
-            {"athletic club", "real sociedad"},
-            {"rayo vallecano", "getafe"},
-            {"espanyol", "barcelona"},
-            {"celta vigo", "deportivo"},
+            ("real madrid", "barcelona"),
+            ("real madrid", "atlético madrid"),
+            ("barcelona", "atlético madrid"),
+            ("real betis", "sevilla"),
+            ("valencia", "levante"),
+            ("athletic club", "real sociedad"),
+            ("rayo vallecano", "getafe"),
+            ("espanyol", "barcelona"),
+            ("celta vigo", "deportivo"),
         ]
-        pair = {home.lower(), away.lower()}
-        return any(
-            all(any(d in t for t in pair) for d in derby)
-            for derby in derbies
-        )
+        h = home.lower()
+        a = away.lower()
+        for team_a, team_b in derbies:
+            # Substring match: "Atlético Madrid" contiene "atlético madrid"
+            home_is_a = team_a in h or h in team_a
+            home_is_b = team_b in h or h in team_b
+            away_is_a = team_a in a or a in team_a
+            away_is_b = team_b in a or a in team_b
+            if (home_is_a and away_is_b) or (home_is_b and away_is_a):
+                return True
+        return False
 
     def _calculate_lambdas(
         self,
