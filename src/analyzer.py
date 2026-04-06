@@ -26,6 +26,7 @@ class MatchAnalysis:
     home_team: str = ""
     away_team: str = ""
     commence_time: str = ""
+    match_id: str = ""
     probabilities: MatchProbabilities = field(default_factory=MatchProbabilities)
     market_odds: dict = field(default_factory=dict)
     ev_results: list = field(default_factory=list)
@@ -36,6 +37,10 @@ class MatchAnalysis:
     recommendation: str = "No apostar"
     correct_scores: list = field(default_factory=list)
     asian_handicap: dict = field(default_factory=dict)
+    # Nuevos mercados
+    corners: dict = field(default_factory=dict)
+    cards: dict = field(default_factory=dict)
+    scorers: dict = field(default_factory=dict)  # {"home": [...], "away": [...]}
 
 
 class Analyzer:
@@ -62,12 +67,15 @@ class Analyzer:
         away_stats: Optional[dict] = None,
         commence_time: str = "",
         h2h_data: Optional[list] = None,
+        match_id: str = "",
+        scorers: Optional[dict] = None,
     ) -> MatchAnalysis:
         """Análisis completo de un partido."""
         analysis = MatchAnalysis(
             home_team=home_team,
             away_team=away_team,
             commence_time=commence_time,
+            match_id=match_id,
             market_odds=odds,
         )
 
@@ -121,7 +129,48 @@ class Analyzer:
         if correlation_warnings:
             analysis.insights.extend(f"⚠️ {w}" for w in correlation_warnings)
 
+        # 10. Corners estimados
+        analysis.corners = self._poisson.estimate_corners(
+            probs.lambda_home, probs.lambda_away, home_stats, away_stats
+        )
+
+        # 11. Tarjetas estimadas
+        is_derby = self._is_derby(home_team, away_team)
+        analysis.cards = self._poisson.estimate_cards(
+            probs.lambda_home, probs.lambda_away, home_stats, away_stats, is_derby
+        )
+
+        # 12. Goleadores
+        if scorers:
+            import math
+            for side in ("home", "away"):
+                for p in scorers.get(side, []):
+                    # P(anotar) = 1 - e^(-goals_per_90)
+                    p["anytime_scorer_prob"] = round(1 - math.exp(-p["goals_per_90"]), 4)
+                    p["anytime_assist_prob"] = round(1 - math.exp(-p["assists_per_90"]), 4)
+            analysis.scorers = scorers
+
         return analysis
+
+    @staticmethod
+    def _is_derby(home: str, away: str) -> bool:
+        """Detecta si es un derby/clásico con mayor intensidad."""
+        derbies = [
+            {"real madrid", "barcelona"},
+            {"real madrid", "atlético madrid"},
+            {"barcelona", "atlético madrid"},
+            {"real betis", "sevilla"},
+            {"valencia", "levante"},
+            {"athletic club", "real sociedad"},
+            {"rayo vallecano", "getafe"},
+            {"espanyol", "barcelona"},
+            {"celta vigo", "deportivo"},
+        ]
+        pair = {home.lower(), away.lower()}
+        return any(
+            all(any(d in t for t in pair) for d in derby)
+            for derby in derbies
+        )
 
     def _calculate_lambdas(
         self,

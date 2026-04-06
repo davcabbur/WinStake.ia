@@ -172,7 +172,12 @@ def main(cli_args: list = None):
     standings = football_client.get_standings()
     logger.info(f"   → {len(standings)} equipos en clasificación")
 
-    # ── 4. Analizar cada partido ─────────────────────────
+    # ── 4. Obtener goleadores ───────────────────────────
+    logger.info("⚽ Obteniendo goleadores de La Liga...")
+    scorers = football_client.get_top_scorers()
+    logger.info(f"   → {len(scorers)} goleadores cargados")
+
+    # ── 5. Analizar cada partido ─────────────────────────
     logger.info("🧠 Ejecutando análisis cuantitativo...\n")
     analyses = []
 
@@ -195,6 +200,8 @@ def main(cli_args: list = None):
                 if h2h_data:
                     logger.info(f"      📜 H2H: {len(h2h_data)} enfrentamientos previos")
 
+        match_scorers = football_client.get_players_for_match(home, away, scorers)
+
         analysis = analyzer.analyze_match(
             home_team=home,
             away_team=away,
@@ -203,6 +210,8 @@ def main(cli_args: list = None):
             away_stats=away_stats,
             commence_time=match.get("commence_time", ""),
             h2h_data=h2h_data,
+            match_id=match.get("id", f"{home}_{away}"),
+            scorers=match_scorers,
         )
         analyses.append(analysis)
 
@@ -214,7 +223,7 @@ def main(cli_args: list = None):
         else:
             logger.info("   ❌ Sin valor")
 
-    # ── 5. Persistencia ──────────────────────────────────
+    # ── 6. Persistencia ──────────────────────────────────
     if not args.dry_run:
         db = Database()
         logger.info("\n💾 Guardando análisis en base de datos...")
@@ -234,15 +243,15 @@ def main(cli_args: list = None):
                 f"({roi['wins']}W-{roi['losses']}L, {roi['total_profit']:+.1f}u)"
             )
 
-    # ── 6. Export CSV ────────────────────────────────────
+    # ── 7. Export CSV ────────────────────────────────────
     if args.output_csv:
         export_csv(analyses, args.output_csv)
 
-    # ── 7. Resumen ───────────────────────────────────────
+    # ── 8. Resumen ───────────────────────────────────────
     value_count = sum(1 for a in analyses if a.best_bet and a.best_bet.is_value)
     logger.info(f"\n📊 Resumen: {value_count}/{len(analyses)} partidos con valor")
 
-    # ── 8. Formatear y Enviar ────────────────────────────
+    # ── 9. Formatear y Enviar ────────────────────────────
     if value_count > 0 and not args.dry_run:
         logger.info("📝 Formateando reporte (solo partidos con Value)...")
         value_analyses = [a for a in analyses if a.best_bet and a.best_bet.is_value]
@@ -259,7 +268,7 @@ def main(cli_args: list = None):
         logger.info("🛑 No se detectaron Value Bets. No se envía mensaje a Telegram.")
         success = True
 
-    # ── 9. Resultado ─────────────────────────────────────
+    # ── 10. Resultado ────────────────────────────────────
     elapsed = (datetime.now() - start_time).total_seconds()
     if success:
         logger.info(f"\n✅ Análisis completado en {elapsed:.1f}s")

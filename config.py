@@ -19,7 +19,7 @@ DASHBOARD_API_KEY = os.getenv("DASHBOARD_API_KEY", "")
 ODDS_API_BASE = "https://api.the-odds-api.com/v4"
 SPORT_KEY = "soccer_spain_la_liga"
 ODDS_REGIONS = "eu"         # Cuotas europeas (decimales)
-ODDS_MARKETS = "h2h,totals" # 1X2 + Over/Under
+ODDS_MARKETS = "h2h,totals" # 1X2 + Over/Under (BTTS y DC calculados por modelo Poisson)
 ODDS_FORMAT = "decimal"
 
 # ── API-Football (RapidAPI) ───────────────────────────────

@@ -30,6 +30,25 @@ class MatchProbabilities:
     xg_home: float = 0.0
     xg_away: float = 0.0
     xg_used: bool = False
+    # Nuevos mercados
+    double_chance_1x: float = 0.0
+    double_chance_x2: float = 0.0
+    double_chance_12: float = 0.0
+    over_15: float = 0.0
+    under_15: float = 0.0
+    over_35: float = 0.0
+    under_35: float = 0.0
+    # Corners (estimación)
+    corners_lambda_home: float = 0.0
+    corners_lambda_away: float = 0.0
+    corners_over_85: float = 0.0
+    corners_over_95: float = 0.0
+    corners_over_105: float = 0.0
+    # Tarjetas (estimación)
+    cards_lambda: float = 0.0
+    cards_over_35: float = 0.0
+    cards_over_45: float = 0.0
+    cards_over_55: float = 0.0
 
 
 class PoissonModel:
@@ -151,7 +170,9 @@ class PoissonModel:
         home_win = 0.0
         draw = 0.0
         away_win = 0.0
+        over_15 = 0.0
         over_25 = 0.0
+        over_35 = 0.0
         btts_yes = 0.0
 
         for h in range(self.max_goals + 1):
@@ -165,8 +186,13 @@ class PoissonModel:
                 else:
                     away_win += p
 
-                if h + a > 2:
+                total_goals = h + a
+                if total_goals > 1:
+                    over_15 += p
+                if total_goals > 2:
                     over_25 += p
+                if total_goals > 3:
+                    over_35 += p
 
                 if h > 0 and a > 0:
                     btts_yes += p
@@ -177,8 +203,15 @@ class PoissonModel:
             draw /= total_1x2
             away_win /= total_1x2
 
+        under_15 = 1.0 - over_15
         under_25 = 1.0 - over_25
+        under_35 = 1.0 - over_35
         btts_no = 1.0 - btts_yes
+
+        # Doble oportunidad
+        dc_1x = home_win + draw
+        dc_x2 = draw + away_win
+        dc_12 = home_win + away_win
 
         return MatchProbabilities(
             home_win=round(home_win, 4),
@@ -190,6 +223,13 @@ class PoissonModel:
             btts_no=round(btts_no, 4),
             lambda_home=lambda_home,
             lambda_away=lambda_away,
+            double_chance_1x=round(dc_1x, 4),
+            double_chance_x2=round(dc_x2, 4),
+            double_chance_12=round(dc_12, 4),
+            over_15=round(over_15, 4),
+            under_15=round(under_15, 4),
+            over_35=round(over_35, 4),
+            under_35=round(under_35, 4),
         )
 
     def correct_score_matrix(
@@ -210,6 +250,99 @@ class PoissonModel:
 
         scores.sort(key=lambda x: x["probability"], reverse=True)
         return scores[:top_n]
+
+    def estimate_corners(
+        self,
+        lambda_home: float,
+        lambda_away: float,
+        home_stats: Optional[dict] = None,
+        away_stats: Optional[dict] = None,
+    ) -> dict:
+        """
+        Estima corners usando correlación con fuerza de ataque.
+        La Liga avg ~10 corners/partido. Equipos más atacantes generan más corners.
+        """
+        LA_LIGA_AVG_CORNERS = 10.0
+        avg_goals_per_team = self.league_avg_goals / 2
+
+        # Estimar corners por equipo basándose en su lambda ofensivo
+        attack_ratio_home = lambda_home / avg_goals_per_team
+        attack_ratio_away = lambda_away / avg_goals_per_team
+
+        # Corners correlacionan con ataque: ~5 corners base por equipo
+        corners_home = 5.0 * (0.6 + 0.4 * attack_ratio_home)
+        corners_away = 5.0 * (0.6 + 0.4 * attack_ratio_away)
+
+        # Ventaja local en corners
+        corners_home *= 1.10
+        corners_away *= 0.92
+
+        total_corners = corners_home + corners_away
+
+        # Usar Poisson para over/under
+        over_85 = 1.0 - poisson.cdf(8, total_corners)
+        over_95 = 1.0 - poisson.cdf(9, total_corners)
+        over_105 = 1.0 - poisson.cdf(10, total_corners)
+
+        return {
+            "corners_home": round(corners_home, 1),
+            "corners_away": round(corners_away, 1),
+            "total": round(total_corners, 1),
+            "over_85": round(over_85, 4),
+            "over_95": round(over_95, 4),
+            "over_105": round(over_105, 4),
+        }
+
+    def estimate_cards(
+        self,
+        lambda_home: float,
+        lambda_away: float,
+        home_stats: Optional[dict] = None,
+        away_stats: Optional[dict] = None,
+        is_derby: bool = False,
+    ) -> dict:
+        """
+        Estima tarjetas usando correlación con estilo defensivo.
+        La Liga avg ~4.5 tarjetas/partido.
+        """
+        LA_LIGA_AVG_CARDS = 4.5
+        avg_goals_per_team = self.league_avg_goals / 2
+
+        # Equipos más defensivos (menos goles a favor) tienden a cometer más faltas
+        defense_factor_home = 1.0
+        defense_factor_away = 1.0
+
+        if home_stats and home_stats.get("played", 0) > 0:
+            gf_ratio = home_stats["goals_for"] / home_stats["played"] / avg_goals_per_team
+            defense_factor_home = max(0.7, min(1.4, 1.3 - 0.3 * gf_ratio))
+
+        if away_stats and away_stats.get("played", 0) > 0:
+            gf_ratio = away_stats["goals_for"] / away_stats["played"] / avg_goals_per_team
+            defense_factor_away = max(0.7, min(1.4, 1.3 - 0.3 * gf_ratio))
+
+        # Visitante recibe más tarjetas
+        cards_home = (LA_LIGA_AVG_CARDS / 2) * 0.90 * defense_factor_home
+        cards_away = (LA_LIGA_AVG_CARDS / 2) * 1.10 * defense_factor_away
+
+        # Factor derby/rivalidad
+        if is_derby:
+            cards_home *= 1.20
+            cards_away *= 1.20
+
+        total_cards = cards_home + cards_away
+
+        over_35 = 1.0 - poisson.cdf(3, total_cards)
+        over_45 = 1.0 - poisson.cdf(4, total_cards)
+        over_55 = 1.0 - poisson.cdf(5, total_cards)
+
+        return {
+            "cards_home": round(cards_home, 1),
+            "cards_away": round(cards_away, 1),
+            "total": round(total_cards, 1),
+            "over_35": round(over_35, 4),
+            "over_45": round(over_45, 4),
+            "over_55": round(over_55, 4),
+        }
 
     def asian_handicap(
         self, lambda_home: float, lambda_away: float, odds: dict

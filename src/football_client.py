@@ -212,6 +212,120 @@ class FootballClient:
         except (KeyError, TypeError):
             return []
 
+    def get_top_scorers(self, limit: int = 40) -> list[dict]:
+        """Obtiene goleadores y asistentes de La Liga para estimar probabilidad de anotar."""
+        if self._mock_mode:
+            return self._get_mock_scorers()
+
+        cache_key = f"top_scorers_{config.LA_LIGA_ID}_{config.CURRENT_SEASON}"
+        cached = self.cache.get(cache_key, config.CACHE_TTL_H2H)
+        if cached is not None:
+            logger.info(f"✅ Goleadores desde caché ({len(cached)} jugadores)")
+            return cached
+
+        data = self._request("players/topscorers", {
+            "league": config.LA_LIGA_ID,
+            "season": config.CURRENT_SEASON,
+        })
+        if not data:
+            return self._get_mock_scorers()
+
+        try:
+            result = []
+            for p in data.get("response", [])[:limit]:
+                player = p["player"]
+                stats = p["statistics"][0]
+                appearances = stats["games"]["appearences"] or 1
+                goals = stats["goals"]["total"] or 0
+                assists = stats["goals"]["assists"] or 0
+                minutes = stats["games"]["minutes"] or 1
+                team_name = stats["team"]["name"]
+                team_id = stats["team"]["id"]
+
+                goals_per_90 = (goals / minutes) * 90 if minutes > 0 else 0
+                assists_per_90 = (assists / minutes) * 90 if minutes > 0 else 0
+
+                result.append({
+                    "player_name": player["name"],
+                    "player_id": player["id"],
+                    "team_name": team_name,
+                    "team_id": team_id,
+                    "goals": goals,
+                    "assists": assists,
+                    "appearances": appearances,
+                    "minutes": minutes,
+                    "goals_per_90": round(goals_per_90, 3),
+                    "assists_per_90": round(assists_per_90, 3),
+                })
+
+            self.cache.set(cache_key, result)
+            logger.info(f"💾 Goleadores guardados en caché ({len(result)} jugadores)")
+            return result
+
+        except (KeyError, TypeError, IndexError) as e:
+            logger.error(f"❌ Error parseando top scorers: {e}")
+            return self._get_mock_scorers()
+
+    def _get_mock_scorers(self) -> list[dict]:
+        """Goleadores simulados basados en datos reales J30 2025-26."""
+        logger.info("🔧 Usando goleadores simulados")
+        players = [
+            ("Robert Lewandowski", 1001, "Barcelona", 1001, 25, 5, 28, 2340),
+            ("Kylian Mbappé", 1002, "Real Madrid", 1002, 20, 6, 29, 2520),
+            ("Raphinha", 1003, "Barcelona", 1001, 16, 10, 28, 2380),
+            ("Alexander Sörloth", 1004, "Atlético Madrid", 1004, 14, 3, 27, 2160),
+            ("Ayoze Pérez", 1005, "Villarreal", 1003, 13, 5, 28, 2300),
+            ("Antoine Griezmann", 1006, "Atlético Madrid", 1004, 11, 8, 28, 2200),
+            ("Iago Aspas", 1007, "Celta Vigo", 1006, 11, 5, 27, 2100),
+            ("Vinicius Jr", 1008, "Real Madrid", 1002, 10, 7, 25, 2050),
+            ("Iker Muniain", 1009, "Real Betis", 1005, 9, 4, 26, 2000),
+            ("Gorka Guruzeta", 1010, "Athletic Club", 1009, 9, 3, 27, 2150),
+            ("Ante Budimir", 1011, "Osasuna", 1010, 9, 2, 28, 2250),
+            ("Borja Iglesias", 1012, "Real Betis", 1005, 8, 4, 24, 1800),
+            ("Dani Olmo", 1013, "Barcelona", 1001, 8, 6, 22, 1700),
+            ("Samu Omorodion", 1014, "Atlético Madrid", 1004, 8, 2, 25, 1900),
+            ("Hugo Duro", 1015, "Valencia", 1012, 8, 3, 28, 2200),
+            ("Bryan Gil", 1016, "Girona", 1013, 7, 4, 26, 1950),
+            ("Chimy Ávila", 1017, "Osasuna", 1010, 7, 3, 24, 1800),
+            ("Óscar Trejo", 1018, "Rayo Vallecano", 1014, 6, 6, 27, 2100),
+            ("Javier Puado", 1019, "Espanyol", 1011, 7, 3, 28, 2300),
+            ("Álvaro García", 1020, "Rayo Vallecano", 1014, 6, 3, 26, 2000),
+        ]
+        return [
+            {
+                "player_name": name, "player_id": pid,
+                "team_name": team, "team_id": tid,
+                "goals": g, "assists": a, "appearances": apps, "minutes": mins,
+                "goals_per_90": round((g / mins) * 90, 3) if mins > 0 else 0,
+                "assists_per_90": round((a / mins) * 90, 3) if mins > 0 else 0,
+            }
+            for name, pid, team, tid, g, a, apps, mins in players
+        ]
+
+    def get_players_for_match(self, home_team: str, away_team: str, scorers: list[dict]) -> dict:
+        """Filtra goleadores relevantes para un partido específico."""
+        home_players = []
+        away_players = []
+
+        home_lower = home_team.lower()
+        away_lower = away_team.lower()
+
+        for p in scorers:
+            team_lower = p["team_name"].lower()
+            if home_lower in team_lower or team_lower in home_lower:
+                home_players.append(p)
+            elif away_lower in team_lower or team_lower in away_lower:
+                away_players.append(p)
+
+        # Ordenar por goles/90 desc y tomar top 3 de cada equipo
+        home_players.sort(key=lambda x: x["goals_per_90"], reverse=True)
+        away_players.sort(key=lambda x: x["goals_per_90"], reverse=True)
+
+        return {
+            "home": home_players[:3],
+            "away": away_players[:3],
+        }
+
     def find_team_in_standings(self, team_name: str, standings: list[dict]) -> Optional[dict]:
         """Busca un equipo en la clasificación por nombre (fuzzy match)."""
         name_lower = team_name.lower()

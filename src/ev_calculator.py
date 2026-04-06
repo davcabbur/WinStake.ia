@@ -81,11 +81,22 @@ class EVCalculator:
         results = []
 
         outcomes = [
+            # 1X2
             ("Local", probs.home_win, odds.get("home")),
             ("Empate", probs.draw, odds.get("draw")),
             ("Visitante", probs.away_win, odds.get("away")),
+            # Doble Oportunidad
+            ("1X", probs.double_chance_1x, odds.get("double_chance_1x")),
+            ("X2", probs.double_chance_x2, odds.get("double_chance_x2")),
+            ("12", probs.double_chance_12, odds.get("double_chance_12")),
+            # Over/Under
+            ("Over 1.5", probs.over_15, odds.get("over_15")),
+            ("Under 1.5", probs.under_15, odds.get("under_15")),
             ("Over 2.5", probs.over_25, odds.get("over_25")),
             ("Under 2.5", probs.under_25, odds.get("under_25")),
+            ("Over 3.5", probs.over_35, odds.get("over_35")),
+            ("Under 3.5", probs.under_35, odds.get("under_35")),
+            # BTTS
             ("BTTS Sí", probs.btts_yes, odds.get("btts_yes")),
             ("BTTS No", probs.btts_no, odds.get("btts_no")),
         ]

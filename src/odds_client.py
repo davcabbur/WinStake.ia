@@ -105,7 +105,9 @@ class OddsClient:
                 "away_team": event.get("away_team"),
                 "commence_time": event.get("commence_time"),
                 "odds_h2h": {"home": [], "draw": [], "away": []},
-                "odds_totals": {"over_25": [], "under_25": []},
+                "odds_totals": {"over_15": [], "under_15": [], "over_25": [], "under_25": [], "over_35": [], "under_35": []},
+                "odds_btts": {"yes": [], "no": []},
+                "odds_double_chance": {"1x": [], "x2": [], "12": []},
                 "bookmakers_count": 0,
             }
 
@@ -115,8 +117,7 @@ class OddsClient:
             for bm in bookmakers:
                 for market in bm.get("markets", []):
                     if market["key"] == "h2h":
-                        outcomes = market.get("outcomes", [])
-                        for o in outcomes:
+                        for o in market.get("outcomes", []):
                             if o["name"] == event["home_team"]:
                                 match["odds_h2h"]["home"].append(o["price"])
                             elif o["name"] == event["away_team"]:
@@ -125,22 +126,56 @@ class OddsClient:
                                 match["odds_h2h"]["draw"].append(o["price"])
 
                     elif market["key"] == "totals":
-                        outcomes = market.get("outcomes", [])
-                        for o in outcomes:
+                        for o in market.get("outcomes", []):
                             point = o.get("point", 2.5)
-                            if point == 2.5:
-                                if o["name"] == "Over":
+                            if o["name"] == "Over":
+                                if point == 1.5:
+                                    match["odds_totals"]["over_15"].append(o["price"])
+                                elif point == 2.5:
                                     match["odds_totals"]["over_25"].append(o["price"])
-                                elif o["name"] == "Under":
+                                elif point == 3.5:
+                                    match["odds_totals"]["over_35"].append(o["price"])
+                            elif o["name"] == "Under":
+                                if point == 1.5:
+                                    match["odds_totals"]["under_15"].append(o["price"])
+                                elif point == 2.5:
                                     match["odds_totals"]["under_25"].append(o["price"])
+                                elif point == 3.5:
+                                    match["odds_totals"]["under_35"].append(o["price"])
+
+                    elif market["key"] == "btts":
+                        for o in market.get("outcomes", []):
+                            if o["name"] == "Yes":
+                                match["odds_btts"]["yes"].append(o["price"])
+                            elif o["name"] == "No":
+                                match["odds_btts"]["no"].append(o["price"])
+
+                    elif market["key"] == "double_chance":
+                        for o in market.get("outcomes", []):
+                            name = o["name"]
+                            if name == f"{event['home_team']} or Draw":
+                                match["odds_double_chance"]["1x"].append(o["price"])
+                            elif name == f"{event['away_team']} or Draw":
+                                match["odds_double_chance"]["x2"].append(o["price"])
+                            elif "Draw" not in name:
+                                match["odds_double_chance"]["12"].append(o["price"])
 
             # Calcular cuotas promedio (filtrando outliers)
             match["avg_odds"] = {
                 "home": self._trimmed_mean(match["odds_h2h"]["home"]),
                 "draw": self._trimmed_mean(match["odds_h2h"]["draw"]),
                 "away": self._trimmed_mean(match["odds_h2h"]["away"]),
+                "double_chance_1x": self._trimmed_mean(match["odds_double_chance"]["1x"]),
+                "double_chance_x2": self._trimmed_mean(match["odds_double_chance"]["x2"]),
+                "double_chance_12": self._trimmed_mean(match["odds_double_chance"]["12"]),
+                "over_15": self._trimmed_mean(match["odds_totals"]["over_15"]),
+                "under_15": self._trimmed_mean(match["odds_totals"]["under_15"]),
                 "over_25": self._trimmed_mean(match["odds_totals"]["over_25"]),
                 "under_25": self._trimmed_mean(match["odds_totals"]["under_25"]),
+                "over_35": self._trimmed_mean(match["odds_totals"]["over_35"]),
+                "under_35": self._trimmed_mean(match["odds_totals"]["under_35"]),
+                "btts_yes": self._trimmed_mean(match["odds_btts"]["yes"]),
+                "btts_no": self._trimmed_mean(match["odds_btts"]["no"]),
             }
 
             matches.append(match)
@@ -160,57 +195,58 @@ class OddsClient:
         return round(sum(trimmed) / len(trimmed), 2)
 
     def _get_mock_odds(self) -> list[dict]:
-        """Datos simulados para desarrollo sin API key."""
-        logger.info("🔧 Usando cuotas simuladas (modo desarrollo)")
+        """Datos simulados para desarrollo sin API key — Jornada 31."""
+        logger.info("🔧 Usando cuotas simuladas (modo desarrollo) — J31")
+
+        def _full_odds(home, draw, away, o25, u25, btts_y=None, btts_n=None):
+            """Genera dict de odds completo con mercados derivados."""
+            btts_y = btts_y or round(1 / (0.55 if o25 < 2.0 else 0.45), 2)
+            btts_n = btts_n or round(1 / (1 - 1/btts_y), 2)
+            dc_1x = round(1 / (1/home + 1/draw) * 0.92, 2)
+            dc_x2 = round(1 / (1/away + 1/draw) * 0.92, 2)
+            dc_12 = round(1 / (1/home + 1/away) * 0.92, 2)
+            o15 = round(max(1.05, o25 * 0.62), 2)
+            u15 = round(1 / (1 - 1/o15), 2)
+            o35 = round(o25 * 1.65, 2)
+            u35 = round(1 / (1 - 1/o35), 2)
+            return {
+                "home": home, "draw": draw, "away": away,
+                "double_chance_1x": dc_1x, "double_chance_x2": dc_x2, "double_chance_12": dc_12,
+                "over_15": o15, "under_15": u15,
+                "over_25": o25, "under_25": u25,
+                "over_35": o35, "under_35": u35,
+                "btts_yes": btts_y, "btts_no": btts_n,
+            }
+
         return [
-            {
-                "id": "mock_1", "home_team": "Rayo Vallecano", "away_team": "Elche",
-                "commence_time": "2026-04-03T19:00:00Z", "bookmakers_count": 5,
-                "avg_odds": {"home": 1.85, "draw": 3.40, "away": 4.20, "over_25": 2.10, "under_25": 1.75},
-            },
-            {
-                "id": "mock_2", "home_team": "Real Sociedad", "away_team": "Levante",
-                "commence_time": "2026-04-04T14:00:00Z", "bookmakers_count": 5,
-                "avg_odds": {"home": 1.68, "draw": 3.60, "away": 5.00, "over_25": 1.95, "under_25": 1.85},
-            },
-            {
-                "id": "mock_3", "home_team": "Mallorca", "away_team": "Real Madrid",
-                "commence_time": "2026-04-04T16:15:00Z", "bookmakers_count": 5,
-                "avg_odds": {"home": 5.50, "draw": 3.80, "away": 1.67, "over_25": 1.80, "under_25": 2.00},
-            },
-            {
-                "id": "mock_4", "home_team": "Real Betis", "away_team": "Espanyol",
-                "commence_time": "2026-04-04T18:30:00Z", "bookmakers_count": 5,
-                "avg_odds": {"home": 1.75, "draw": 3.50, "away": 4.50, "over_25": 1.90, "under_25": 1.90},
-            },
-            {
-                "id": "mock_5", "home_team": "Atlético Madrid", "away_team": "Barcelona",
-                "commence_time": "2026-04-04T21:00:00Z", "bookmakers_count": 5,
-                "avg_odds": {"home": 3.15, "draw": 3.30, "away": 2.10, "over_25": 1.85, "under_25": 1.95},
-            },
-            {
-                "id": "mock_6", "home_team": "Getafe", "away_team": "Athletic Club",
-                "commence_time": "2026-04-05T14:00:00Z", "bookmakers_count": 5,
-                "avg_odds": {"home": 3.05, "draw": 3.10, "away": 2.90, "over_25": 2.30, "under_25": 1.60},
-            },
-            {
-                "id": "mock_7", "home_team": "Valencia", "away_team": "Celta Vigo",
-                "commence_time": "2026-04-05T16:15:00Z", "bookmakers_count": 5,
-                "avg_odds": {"home": 2.38, "draw": 3.30, "away": 2.75, "over_25": 1.80, "under_25": 2.00},
-            },
-            {
-                "id": "mock_8", "home_team": "Real Oviedo", "away_team": "Sevilla",
-                "commence_time": "2026-04-05T18:30:00Z", "bookmakers_count": 5,
-                "avg_odds": {"home": 2.75, "draw": 3.20, "away": 2.60, "over_25": 1.85, "under_25": 1.95},
-            },
-            {
-                "id": "mock_9", "home_team": "Deportivo Alavés", "away_team": "Osasuna",
-                "commence_time": "2026-04-05T21:00:00Z", "bookmakers_count": 5,
-                "avg_odds": {"home": 2.42, "draw": 3.30, "away": 3.25, "over_25": 2.05, "under_25": 1.78},
-            },
-            {
-                "id": "mock_10", "home_team": "Girona", "away_team": "Villarreal",
-                "commence_time": "2026-04-06T21:00:00Z", "bookmakers_count": 5,
-                "avg_odds": {"home": 2.87, "draw": 3.30, "away": 2.37, "over_25": 1.75, "under_25": 2.10},
-            },
+            {"id": "mock_1", "home_team": "Rayo Vallecano", "away_team": "Elche",
+             "commence_time": "2026-04-10T19:00:00Z", "bookmakers_count": 5,
+             "avg_odds": _full_odds(1.85, 3.40, 4.20, 2.10, 1.75)},
+            {"id": "mock_2", "home_team": "Real Sociedad", "away_team": "Levante",
+             "commence_time": "2026-04-11T14:00:00Z", "bookmakers_count": 5,
+             "avg_odds": _full_odds(1.68, 3.60, 5.00, 1.95, 1.85)},
+            {"id": "mock_3", "home_team": "Mallorca", "away_team": "Real Madrid",
+             "commence_time": "2026-04-11T16:15:00Z", "bookmakers_count": 5,
+             "avg_odds": _full_odds(5.50, 3.80, 1.67, 1.80, 2.00)},
+            {"id": "mock_4", "home_team": "Real Betis", "away_team": "Espanyol",
+             "commence_time": "2026-04-11T18:30:00Z", "bookmakers_count": 5,
+             "avg_odds": _full_odds(1.75, 3.50, 4.50, 1.90, 1.90)},
+            {"id": "mock_5", "home_team": "Atlético Madrid", "away_team": "Barcelona",
+             "commence_time": "2026-04-11T21:00:00Z", "bookmakers_count": 5,
+             "avg_odds": _full_odds(3.15, 3.30, 2.10, 1.85, 1.95)},
+            {"id": "mock_6", "home_team": "Getafe", "away_team": "Athletic Club",
+             "commence_time": "2026-04-12T14:00:00Z", "bookmakers_count": 5,
+             "avg_odds": _full_odds(3.05, 3.10, 2.90, 2.30, 1.60)},
+            {"id": "mock_7", "home_team": "Valencia", "away_team": "Celta Vigo",
+             "commence_time": "2026-04-12T16:15:00Z", "bookmakers_count": 5,
+             "avg_odds": _full_odds(2.38, 3.30, 2.75, 1.80, 2.00)},
+            {"id": "mock_8", "home_team": "Real Oviedo", "away_team": "Sevilla",
+             "commence_time": "2026-04-12T18:30:00Z", "bookmakers_count": 5,
+             "avg_odds": _full_odds(2.75, 3.20, 2.60, 1.85, 1.95)},
+            {"id": "mock_9", "home_team": "Deportivo Alavés", "away_team": "Osasuna",
+             "commence_time": "2026-04-12T21:00:00Z", "bookmakers_count": 5,
+             "avg_odds": _full_odds(2.42, 3.30, 3.25, 2.05, 1.78)},
+            {"id": "mock_10", "home_team": "Girona", "away_team": "Villarreal",
+             "commence_time": "2026-04-13T21:00:00Z", "bookmakers_count": 5,
+             "avg_odds": _full_odds(2.87, 3.30, 2.37, 1.75, 2.10)},
         ]
