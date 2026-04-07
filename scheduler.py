@@ -1,13 +1,16 @@
 """
-WinStake.ia — Scheduler
-Ejecuta el análisis de forma programada.
+WinStake.ia — Scheduler Multi-Deporte
+Ejecuta el análisis de forma programada para La Liga y/o NBA.
 
 Modos de uso:
     1. Scheduler continuo (deja corriendo):
-       python scheduler.py
+       python scheduler.py                  # Ambos deportes
+       python scheduler.py --sport laliga   # Solo La Liga
+       python scheduler.py --sport nba      # Solo NBA
 
     2. Ejecución única (para Windows Task Scheduler):
        python scheduler.py --once
+       python scheduler.py --once --sport nba
 """
 
 import sys
@@ -19,79 +22,88 @@ from datetime import datetime
 import schedule
 
 from main import main as run_analysis
+from src.sports.config import SPORTS
 
 from src.logger_config import setup_logging
 
-# ── Logging ───────────────────────────────────────────────
 logger = setup_logging("Scheduler")
 
-# ── Configuración de horarios ─────────────────────────────
-# La Liga: partidos viernes, sábado y domingo
-# Análisis se ejecuta antes de la jornada
+# ── Configuración de horarios por deporte ────────────────────
 
-SCHEDULE_TIMES = {
-    "friday":    "10:00",   # Viernes 10:00 — antes del partido nocturno
-    "saturday":  "09:00",   # Sábado 09:00 — antes de los partidos del día
-    "sunday":    "09:00",   # Domingo 09:00 — antes de los partidos del día
-    "midweek":   "10:00",   # Martes/miércoles — para jornadas entre semana
+SPORT_SCHEDULES = {
+    "laliga": {
+        "name": "La Liga",
+        "times": [
+            ("friday", "10:00"),
+            ("saturday", "09:00"),
+            ("sunday", "09:00"),
+            ("tuesday", "10:00"),
+            ("wednesday", "10:00"),
+        ],
+    },
+    "nba": {
+        "name": "NBA",
+        "times": [
+            ("monday", "16:00"),
+            ("tuesday", "16:00"),
+            ("wednesday", "16:00"),
+            ("thursday", "16:00"),
+            ("friday", "16:00"),
+            ("saturday", "14:00"),
+            ("sunday", "14:00"),
+        ],
+    },
 }
 
 
-def safe_run():
+def safe_run(sport: str = "laliga"):
     """Ejecuta el análisis con manejo de errores."""
     try:
+        sport_name = SPORT_SCHEDULES.get(sport, {}).get("name", sport)
         logger.info("=" * 50)
-        logger.info("⏰ Ejecución programada iniciada")
-        logger.info(f"📅 {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
+        logger.info(f"Ejecucion programada: {sport_name}")
+        logger.info(f"{datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
         logger.info("=" * 50)
-        run_analysis([])
-        logger.info("✅ Ejecución programada completada correctamente\n")
+        run_analysis(["--sport", sport])
+        logger.info(f"Ejecucion {sport_name} completada\n")
     except Exception as e:
-        logger.error(f"❌ Error en ejecución programada: {e}\n", exc_info=True)
+        logger.error(f"Error en ejecucion programada ({sport}): {e}\n", exc_info=True)
 
 
-def setup_schedule():
-    """Configura los horarios de ejecución."""
+def setup_schedule(sports: list[str]):
+    """Configura los horarios de ejecucion para los deportes indicados."""
+    for sport in sports:
+        conf = SPORT_SCHEDULES.get(sport)
+        if not conf:
+            logger.warning(f"Deporte '{sport}' no tiene schedule configurado")
+            continue
 
-    # Viernes
-    schedule.every().friday.at(SCHEDULE_TIMES["friday"]).do(safe_run)
-    logger.info(f"📅 Viernes a las {SCHEDULE_TIMES['friday']}")
-
-    # Sábado
-    schedule.every().saturday.at(SCHEDULE_TIMES["saturday"]).do(safe_run)
-    logger.info(f"📅 Sábado a las {SCHEDULE_TIMES['saturday']}")
-
-    # Domingo
-    schedule.every().sunday.at(SCHEDULE_TIMES["sunday"]).do(safe_run)
-    logger.info(f"📅 Domingo a las {SCHEDULE_TIMES['sunday']}")
-
-    # Martes (jornadas entre semana)
-    schedule.every().tuesday.at(SCHEDULE_TIMES["midweek"]).do(safe_run)
-    logger.info(f"📅 Martes a las {SCHEDULE_TIMES['midweek']}")
-
-    # Miércoles (jornadas entre semana)
-    schedule.every().wednesday.at(SCHEDULE_TIMES["midweek"]).do(safe_run)
-    logger.info(f"📅 Miércoles a las {SCHEDULE_TIMES['midweek']}")
+        logger.info(f"\n{conf['name']}:")
+        for day, time_str in conf["times"]:
+            day_scheduler = getattr(schedule.every(), day)
+            day_scheduler.at(time_str).do(safe_run, sport=sport)
+            logger.info(f"  {day.capitalize()} a las {time_str}")
 
 
-def run_continuous():
-    """Modo daemon: corre continuamente ejecutando según horario."""
-    logger.info("🚀 WinStake.ia Scheduler iniciado")
-    logger.info("Horarios configurados:\n")
+def run_continuous(sports: list[str]):
+    """Modo daemon: corre continuamente ejecutando segun horario."""
+    logger.info("WinStake.ia Scheduler iniciado")
+    logger.info(f"Deportes: {', '.join(sports)}")
+    logger.info("Horarios configurados:")
 
-    setup_schedule()
+    setup_schedule(sports)
 
-    logger.info(f"\n📊 {len(schedule.get_jobs())} tareas programadas")
+    logger.info(f"\n{len(schedule.get_jobs())} tareas programadas")
     next_run = schedule.next_run()
-    logger.info(f"⏭️  Próxima ejecución: {next_run.strftime('%A %d/%m/%Y %H:%M') if next_run else 'N/A'}")
-    logger.info("\n💤 Esperando... (Ctrl+C para detener)\n")
+    logger.info(f"Proxima ejecucion: {next_run.strftime('%A %d/%m/%Y %H:%M') if next_run else 'N/A'}")
+    logger.info("\nEsperando... (Ctrl+C para detener)\n")
 
     try:
         while True:
             schedule.run_pending()
-            time.sleep(30)  # Comprobar cada 30 segundos
+            time.sleep(30)
     except KeyboardInterrupt:
-        logger.info("\n🛑 Scheduler detenido por el usuario")
+        logger.info("\nScheduler detenido por el usuario")
         sys.exit(0)
 
 
@@ -100,25 +112,42 @@ def main():
     parser.add_argument(
         "--once",
         action="store_true",
-        help="Ejecutar el análisis una sola vez y salir (para Task Scheduler)",
+        help="Ejecutar el analisis una sola vez y salir",
     )
     parser.add_argument(
         "--test",
         action="store_true",
-        help="Ejecutar inmediatamente una vez para probar, luego continuar con el scheduler",
+        help="Ejecutar inmediatamente una vez, luego continuar con el scheduler",
+    )
+    parser.add_argument(
+        "--sport",
+        type=str,
+        default=None,
+        help="Deporte a analizar: laliga, nba, o 'all' para ambos (default: all)",
     )
     args = parser.parse_args()
 
-    if args.once:
-        logger.info("🔄 Modo ejecución única (--once)")
-        safe_run()
-    elif args.test:
-        logger.info("🧪 Modo test: ejecutando análisis ahora...")
-        safe_run()
-        logger.info("✅ Test completado. Iniciando scheduler continuo...\n")
-        run_continuous()
+    if args.sport and args.sport != "all":
+        if args.sport not in SPORTS:
+            available = ", ".join(SPORTS.keys())
+            logger.error(f"Deporte '{args.sport}' no valido. Disponibles: {available}")
+            sys.exit(1)
+        sports = [args.sport]
     else:
-        run_continuous()
+        sports = list(SPORT_SCHEDULES.keys())
+
+    if args.once:
+        logger.info("Modo ejecucion unica (--once)")
+        for sport in sports:
+            safe_run(sport)
+    elif args.test:
+        logger.info("Modo test: ejecutando analisis ahora...")
+        for sport in sports:
+            safe_run(sport)
+        logger.info("Test completado. Iniciando scheduler continuo...\n")
+        run_continuous(sports)
+    else:
+        run_continuous(sports)
 
 
 if __name__ == "__main__":

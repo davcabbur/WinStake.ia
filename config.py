@@ -11,6 +11,7 @@ load_dotenv()
 # ── API Keys ──────────────────────────────────────────────
 ODDS_API_KEY = os.getenv("ODDS_API_KEY", "")
 FOOTBALL_API_KEY = os.getenv("FOOTBALL_API_KEY", "")
+BASKETBALL_API_KEY = os.getenv("BASKETBALL_API_KEY", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 DASHBOARD_API_KEY = os.getenv("DASHBOARD_API_KEY", "")

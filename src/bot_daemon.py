@@ -21,19 +21,21 @@ from src.odds_client import OddsClient
 from src.football_client import FootballClient
 from src.analyzer import Analyzer
 from src.formatter import Formatter
+from src.sports.config import get_sport, SPORTS, SportConfig, LALIGA
 from src.logger_config import setup_logging
 
 logger = setup_logging("WinStakeBot")
 
 
-def _run_analysis_for_jornada() -> dict:
+def _run_analysis_for_jornada(sport_config: SportConfig = None) -> dict:
     """
     Ejecuta el análisis completo de la jornada y devuelve un dict
     {match_id: MatchAnalysis} con todos los partidos.
     """
-    odds_client = OddsClient()
+    sc = sport_config or LALIGA
+    odds_client = OddsClient(sport_config=sc)
     football_client = FootballClient()
-    analyzer = Analyzer()
+    analyzer = Analyzer(sport_config=sc)
 
     # 1. Obtener cuotas
     matches_odds = odds_client.get_upcoming_odds()
@@ -83,28 +85,30 @@ def _run_analysis_for_jornada() -> dict:
         )
         analyses[match_id] = analysis
 
-    # 5. Guardar en BD
+    # 6. Guardar en BD
     db = Database()
     for analysis in analyses.values():
-        db.save_analysis(analysis)
+        db.save_analysis(analysis, sport=sc.key)
 
     return analyses
 
 
 # ── Almacenamiento en memoria por chat ──────────────────────
-# {chat_id: {match_id: MatchAnalysis}}
+# {chat_id: {"analyses": {...}, "sport": SportConfig}}
 _jornada_cache: dict[int, dict] = {}
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Manejador para /start o /help."""
     msg = (
-        "🤖 <b>WinStake.ia — Bot de Análisis</b>\n\n"
+        "🤖 <b>WinStake.ia — Bot de Análisis Multi-Deporte</b>\n\n"
         "Comandos disponibles:\n"
-        "🔹 /analizar — Analizar la próxima jornada y elegir partido\n"
+        "⚽ /laliga — Analizar la próxima jornada de La Liga\n"
+        "🏀 /nba — Analizar los próximos partidos NBA\n"
+        "🔹 /analizar — Analizar La Liga (default)\n"
         "🔹 /roi — Consultar tu Bankroll y ROI histórico\n"
         "🔹 /ping — Verificar estado del motor\n\n"
-        "Pulsa /analizar para ver los partidos de la jornada con botones."
+        "Pulsa un comando de deporte para empezar."
     )
     await update.message.reply_html(msg)
 
@@ -134,69 +138,38 @@ async def roi_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_html(msg)
 
 
-async def analizar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def _analizar_sport(update: Update, context: ContextTypes.DEFAULT_TYPE, sport_key: str = "laliga"):
     """
-    Analiza la jornada completa y muestra botones inline con cada partido.
-    El usuario pulsa un botón para ver el análisis detallado de ese partido.
+    Analiza la jornada completa de un deporte y muestra botones inline.
     """
+    sport = get_sport(sport_key)
     chat_id = update.effective_chat.id
-    await update.message.reply_text("⏳ Analizando la próxima jornada de La Liga... Esto puede tardar unos segundos.")
+    await update.message.reply_text(f"⏳ Analizando {sport.emoji} {sport.name}... Esto puede tardar unos segundos.")
 
     try:
         loop = asyncio.get_running_loop()
-        analyses = await loop.run_in_executor(None, _run_analysis_for_jornada)
+        analyses = await loop.run_in_executor(
+            None, lambda: _run_analysis_for_jornada(sport)
+        )
 
         if not analyses:
             await update.message.reply_text("❌ No se encontraron partidos para analizar.")
             return
 
         # Guardar en caché para este chat
-        _jornada_cache[chat_id] = analyses
+        _jornada_cache[chat_id] = {"analyses": analyses, "sport": sport}
 
-        # Construir teclado inline con todos los partidos
-        keyboard = []
-        # Ordenar por fecha
-        sorted_analyses = sorted(analyses.values(), key=lambda a: a.commence_time or "")
-
-        for a in sorted_analyses:
-            # Icono según si tiene value bet
-            if a.best_bet and a.best_bet.is_value:
-                icon = "✅"
-                ev_text = f" | EV: {a.best_bet.ev_percent:+.1f}%"
-            else:
-                icon = "⚽"
-                ev_text = ""
-
-            # Fecha corta
-            date_str = ""
-            if a.commence_time:
-                try:
-                    dt = datetime.fromisoformat(a.commence_time.replace("Z", "+00:00"))
-                    date_str = f" ({dt.strftime('%d/%m %H:%M')})"
-                except (ValueError, AttributeError):
-                    pass
-
-            button_text = f"{icon} {a.home_team} vs {a.away_team}{date_str}{ev_text}"
-            callback_data = f"match:{a.match_id}"
-
-            # Telegram callback_data max 64 bytes, truncar si necesario
-            if len(callback_data.encode('utf-8')) > 64:
-                callback_data = f"match:{a.match_id[:50]}"
-
-            keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
-
-        # Botón extra para ver resumen
-        keyboard.append([InlineKeyboardButton("📊 Ver Resumen Ejecutivo", callback_data="summary")])
-
+        # Construir teclado inline
+        keyboard = _build_match_keyboard(analyses, sport)
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         n_total = len(analyses)
         n_value = sum(1 for a in analyses.values() if a.best_bet and a.best_bet.is_value)
 
         header = (
-            f"🏆 <b>WINSTAKE.IA — JORNADA LA LIGA</b>\n"
+            f"🏆 <b>WINSTAKE.IA — {sport.name.upper()}</b>\n"
             f"📅 {datetime.now().strftime('%d/%m/%Y %H:%M')}\n"
-            f"⚽ {n_total} partidos analizados\n"
+            f"{sport.emoji} {n_total} partidos analizados\n"
             f"🎯 {n_value} con valor detectado\n\n"
             f"Pulsa un partido para ver su análisis completo:"
         )
@@ -211,29 +184,74 @@ async def analizar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Hubo un error ejecutando el análisis. Revisa los logs.")
 
 
+def _build_match_keyboard(analyses: dict, sport: SportConfig) -> list:
+    """Construye teclado inline con botones de partidos."""
+    keyboard = []
+    sorted_analyses = sorted(analyses.values(), key=lambda a: a.commence_time or "")
+
+    for a in sorted_analyses:
+        if a.best_bet and a.best_bet.is_value:
+            icon = "✅"
+            ev_text = f" | EV: {a.best_bet.ev_percent:+.1f}%"
+        else:
+            icon = sport.emoji
+            ev_text = ""
+
+        date_str = ""
+        if a.commence_time:
+            try:
+                dt = datetime.fromisoformat(a.commence_time.replace("Z", "+00:00"))
+                date_str = f" ({dt.strftime('%d/%m %H:%M')})"
+            except (ValueError, AttributeError):
+                pass
+
+        button_text = f"{icon} {a.home_team} vs {a.away_team}{date_str}{ev_text}"
+        callback_data = f"match:{a.match_id}"
+
+        if len(callback_data.encode('utf-8')) > 64:
+            callback_data = f"match:{a.match_id[:50]}"
+
+        keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
+
+    keyboard.append([InlineKeyboardButton("📊 Ver Resumen Ejecutivo", callback_data="summary")])
+    return keyboard
+
+
+async def analizar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Atajo para /analizar (default: La Liga)."""
+    await _analizar_sport(update, context, "laliga")
+
+
+async def laliga_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Analizar La Liga."""
+    await _analizar_sport(update, context, "laliga")
+
+
+async def nba_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Analizar NBA."""
+    await _analizar_sport(update, context, "nba")
+
+
 async def match_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Maneja los clics en los botones inline.
-    Envía el análisis detallado del partido seleccionado.
-    """
+    """Maneja los clics en los botones inline."""
     query = update.callback_query
     await query.answer()
 
     chat_id = update.effective_chat.id
     data = query.data
 
-    # Verificar que hay datos en caché
     if chat_id not in _jornada_cache:
         await query.message.reply_text(
-            "⚠️ No hay análisis en memoria. Ejecuta /analizar primero.",
+            "⚠️ No hay análisis en memoria. Ejecuta /analizar, /laliga o /nba primero.",
         )
         return
 
-    analyses = _jornada_cache[chat_id]
+    cache = _jornada_cache[chat_id]
+    analyses = cache["analyses"]
+    sport = cache["sport"]
     formatter = Formatter()
 
     if data == "summary":
-        # Enviar resumen ejecutivo
         summary = formatter._format_summary(list(analyses.values()))
         chunks = _split_message(summary)
         for chunk in chunks:
@@ -241,7 +259,7 @@ async def match_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data.startswith("match:"):
-        match_id = data[6:]  # Quitar "match:"
+        match_id = data[6:]
 
         if match_id not in analyses:
             await query.message.reply_text("⚠️ Partido no encontrado en el análisis actual.")
@@ -250,7 +268,6 @@ async def match_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         analysis = analyses[match_id]
         msg = formatter.format_single_match(analysis)
 
-        # Enviar con botón de volver
         back_button = InlineKeyboardMarkup([
             [InlineKeyboardButton("⬅️ Volver a la jornada", callback_data="back_to_jornada")]
         ])
@@ -260,59 +277,28 @@ async def match_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup = back_button if i == len(chunks) - 1 else None
             try:
                 await query.message.reply_html(
-                    chunk,
-                    disable_web_page_preview=True,
-                    reply_markup=reply_markup,
+                    chunk, disable_web_page_preview=True, reply_markup=reply_markup,
                 )
             except Exception:
-                # Fallback sin HTML
                 await query.message.reply_text(
-                    _strip_html(chunk),
-                    disable_web_page_preview=True,
-                    reply_markup=reply_markup,
+                    _strip_html(chunk), disable_web_page_preview=True, reply_markup=reply_markup,
                 )
         return
 
     if data == "back_to_jornada":
-        # Reconstruir el teclado de la jornada
-        sorted_analyses = sorted(analyses.values(), key=lambda a: a.commence_time or "")
-        keyboard = []
-        for a in sorted_analyses:
-            if a.best_bet and a.best_bet.is_value:
-                icon = "✅"
-                ev_text = f" | EV: {a.best_bet.ev_percent:+.1f}%"
-            else:
-                icon = "⚽"
-                ev_text = ""
-
-            date_str = ""
-            if a.commence_time:
-                try:
-                    dt = datetime.fromisoformat(a.commence_time.replace("Z", "+00:00"))
-                    date_str = f" ({dt.strftime('%d/%m %H:%M')})"
-                except (ValueError, AttributeError):
-                    pass
-
-            button_text = f"{icon} {a.home_team} vs {a.away_team}{date_str}{ev_text}"
-            callback_data = f"match:{a.match_id}"
-            if len(callback_data.encode('utf-8')) > 64:
-                callback_data = f"match:{a.match_id[:50]}"
-            keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
-
-        keyboard.append([InlineKeyboardButton("📊 Ver Resumen Ejecutivo", callback_data="summary")])
+        keyboard = _build_match_keyboard(analyses, sport)
 
         n_total = len(analyses)
         n_value = sum(1 for a in analyses.values() if a.best_bet and a.best_bet.is_value)
 
         header = (
-            f"🏆 <b>WINSTAKE.IA — JORNADA LA LIGA</b>\n"
-            f"⚽ {n_total} partidos | 🎯 {n_value} con valor\n\n"
+            f"🏆 <b>WINSTAKE.IA — {sport.name.upper()}</b>\n"
+            f"{sport.emoji} {n_total} partidos | 🎯 {n_value} con valor\n\n"
             f"Pulsa un partido para ver su análisis:"
         )
 
         await query.message.reply_html(
-            header,
-            reply_markup=InlineKeyboardMarkup(keyboard),
+            header, reply_markup=InlineKeyboardMarkup(keyboard),
         )
         return
 
@@ -356,6 +342,8 @@ def main():
     application.add_handler(CommandHandler("ping", ping_command))
     application.add_handler(CommandHandler("roi", roi_command))
     application.add_handler(CommandHandler("analizar", analizar_command))
+    application.add_handler(CommandHandler("laliga", laliga_command))
+    application.add_handler(CommandHandler("nba", nba_command))
 
     # Callbacks de botones inline
     application.add_handler(CallbackQueryHandler(match_callback))

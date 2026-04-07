@@ -64,17 +64,14 @@ def test_poisson_very_low_lambda(analyzer):
 
 def test_calculate_ev_positive(analyzer):
     """Probabilidad alta + cuota alta = EV positivo."""
-    class MockProbs:
-        home_win = 0.8
-        draw = 0.1
-        away_win = 0.1
-        btts_yes = 0.5
-        btts_no = 0.5
-        over_25 = 0.6
-        under_25 = 0.4
+    probs = MatchProbabilities(
+        home_win=0.8, draw=0.1, away_win=0.1,
+        btts_yes=0.5, btts_no=0.5,
+        over_25=0.6, under_25=0.4,
+    )
 
     odds = {"home": 2.0, "draw": 3.5, "away": 4.0}
-    ev_results = analyzer._calculate_ev(MockProbs(), odds)
+    ev_results = analyzer._calculate_ev(probs, odds)
 
     home_bet = next(x for x in ev_results if x.selection == "Local")
     assert home_bet.is_value is True
@@ -83,17 +80,14 @@ def test_calculate_ev_positive(analyzer):
 
 def test_calculate_ev_skips_missing_odds(analyzer):
     """Mercados sin cuota se omiten del resultado."""
-    class MockProbs:
-        home_win = 0.5
-        draw = 0.3
-        away_win = 0.2
-        btts_yes = 0.5
-        btts_no = 0.5
-        over_25 = 0.5
-        under_25 = 0.5
+    probs = MatchProbabilities(
+        home_win=0.5, draw=0.3, away_win=0.2,
+        btts_yes=0.5, btts_no=0.5,
+        over_25=0.5, under_25=0.5,
+    )
 
     odds = {"home": 1.90}
-    ev_results = analyzer._calculate_ev(MockProbs(), odds)
+    ev_results = analyzer._calculate_ev(probs, odds)
     selections = [r.selection for r in ev_results]
     assert "Local" in selections
     assert "Empate" not in selections
@@ -101,17 +95,14 @@ def test_calculate_ev_skips_missing_odds(analyzer):
 
 def test_calculate_ev_rejects_odds_below_one(analyzer):
     """Cuotas <= 1.0 se ignoran."""
-    class MockProbs:
-        home_win = 0.9
-        draw = 0.05
-        away_win = 0.05
-        btts_yes = 0.5
-        btts_no = 0.5
-        over_25 = 0.5
-        under_25 = 0.5
+    probs = MatchProbabilities(
+        home_win=0.9, draw=0.05, away_win=0.05,
+        btts_yes=0.5, btts_no=0.5,
+        over_25=0.5, under_25=0.5,
+    )
 
     odds = {"home": 1.0, "draw": 0.5, "away": 3.0}
-    ev_results = analyzer._calculate_ev(MockProbs(), odds)
+    ev_results = analyzer._calculate_ev(probs, odds)
     selections = [r.selection for r in ev_results]
     assert "Local" not in selections
     assert "Empate" not in selections
@@ -148,17 +139,14 @@ def test_fair_odds_zero_overround():
 
 def test_ev_uses_real_market_odds(analyzer):
     """EV se calcula con las cuotas reales de mercado (lo que cobras)."""
-    class MockProbs:
-        home_win = 0.6
-        draw = 0.2
-        away_win = 0.2
-        btts_yes = 0.5
-        btts_no = 0.5
-        over_25 = 0.5
-        under_25 = 0.5
+    probs = MatchProbabilities(
+        home_win=0.6, draw=0.2, away_win=0.2,
+        btts_yes=0.5, btts_no=0.5,
+        over_25=0.5, under_25=0.5,
+    )
 
     odds = {"home": 1.85, "draw": 3.40, "away": 4.20}
-    ev_results = analyzer._calculate_ev(MockProbs(), odds)
+    ev_results = analyzer._calculate_ev(probs, odds)
     home_ev = next(x for x in ev_results if x.selection == "Local")
     # EV = prob * odds - 1 = 0.6 * 1.85 - 1 = 0.11 (11%)
     assert home_ev.ev_percent == pytest.approx(11.0, abs=0.5)

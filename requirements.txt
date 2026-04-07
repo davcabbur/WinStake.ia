@@ -4,6 +4,7 @@ scipy>=1.11.0
 numpy>=1.24.0
 python-telegram-bot>=20.7
 schedule>=1.2.0
+nba_api>=1.4.0
 fastapi>=0.110.0
 uvicorn>=0.29.0
 websockets>=12.00

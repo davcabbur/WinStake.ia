@@ -35,10 +35,16 @@ def _make_analysis(home="Team A", away="Team B", has_value=True) -> MatchAnalysi
         confidence="Media",
     )
     if has_value:
-        analysis.best_bet = EVResult(
+        value_bet = EVResult(
             selection="Local", probability=0.55, odds=1.85,
             ev=0.0175, ev_percent=1.75, is_value=True,
         )
+        analysis.best_bet = value_bet
+        analysis.ev_results = [
+            value_bet,
+            EVResult(selection="Empate", probability=0.25, odds=3.40,
+                     ev=-0.15, ev_percent=-15.0, is_value=False),
+        ]
         analysis.kelly = KellyResult(
             kelly_full=5.0, kelly_half=2.5, stake_units=2.5, risk_level="Bajo",
         )

@@ -9,6 +9,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.10+-blue?logo=python&logoColor=white" alt="Python"/>
   <img src="https://img.shields.io/badge/Liga-La%20Liga-orange?logo=laliga&logoColor=white" alt="La Liga"/>
+  <img src="https://img.shields.io/badge/Liga-NBA-red?logo=nba&logoColor=white" alt="NBA"/>
   <img src="https://img.shields.io/badge/Telegram-Bot-26A5E4?logo=telegram&logoColor=white" alt="Telegram"/>
   <img src="https://img.shields.io/badge/License-MIT-green" alt="License"/>
 </p>
@@ -17,14 +18,18 @@
 
 ## 📖 ¿Qué es WinStake.ia?
 
-WinStake.ia es un sistema de análisis cuantitativo que:
+WinStake.ia es un sistema de análisis cuantitativo multi-deporte que:
 
 1. **Conecta con APIs** de datos deportivos y cuotas en tiempo real
-2. **Modela probabilidades** usando distribución de Poisson con ajustes bayesianos
+2. **Modela probabilidades** usando Poisson (futbol) o Normal (basketball)
 3. **Calcula Expected Value (EV)** comparando el modelo propio vs cuotas de mercado
 4. **Detecta value bets** donde el mercado infravalora un resultado
 5. **Recomienda sizing** con el criterio de Kelly
 6. **Envía análisis** automáticamente a Telegram
+
+**Deportes soportados:**
+- **La Liga** — Modelo Poisson, mercados 1X2, Over/Under, BTTS, Doble Oportunidad
+- **NBA** — Modelo Normal, mercados Moneyline, Spread, Totals
 
 > **Objetivo:** Maximizar el valor esperado (EV) a largo plazo, no las victorias a corto plazo.
 
@@ -41,9 +46,9 @@ Este sistema se inspira en tres pilares:
 - Evitar sesgos narrativos (nombres grandes, rachas, "sensaciones")
 - Tomar decisiones basadas exclusivamente en datos
 
-### 2. Análisis Deportivo Avanzado (xG, Poisson)
-- **Expected Goals (xG):** No medir solo goles, sino la calidad de las ocasiones
-- **Distribución de Poisson:** Modelo estadístico que predice la probabilidad de cada resultado basándose en los goles esperados de cada equipo
+### 2. Análisis Deportivo Avanzado
+- **Futbol (Poisson + xG):** Modela goles esperados con distribución de Poisson, integra Expected Goals (xG)
+- **Basketball (Normal):** Modela puntos esperados con distribución Normal, ajuste por pace y ventaja local
 - **Fuerza atacante/defensiva relativa:** Comparar cada equipo contra la media de la liga
 
 ### 3. Trading Cuantitativo (Hedge Fund)
@@ -56,31 +61,36 @@ Este sistema se inspira en tres pilares:
 ## 🏗️ Arquitectura
 
 ```
-                    ┌──────────────────┐
-                    │   The Odds API   │ ── Cuotas 1X2, O/U
-                    └────────┬─────────┘
-                             │
-                    ┌────────▼─────────┐
-                    │  API-Football    │ ── Stats, xG, Standings
-                    └────────┬─────────┘
-                             │
-                    ┌────────▼─────────┐
-                    │  Motor Análisis  │
-                    │  ┌─────────────┐ │
-                    │  │  Poisson    │ │ ── Probabilidades reales
-                    │  │  EV Calc    │ │ ── Valor esperado
-                    │  │  Kelly      │ │ ── Sizing óptimo
-                    │  │  Edge Det.  │ │ ── Ineficiencias de mercado
-                    │  └─────────────┘ │
-                    └────────┬─────────┘
-                             │
-                    ┌────────▼─────────┐
-                    │  Formateador     │ ── HTML para Telegram
-                    └────────┬─────────┘
-                             │
-                    ┌────────▼─────────┐
-                    │  Bot Telegram 📱 │ ── Envío automático
-                    └──────────────────┘
+          ┌──────────────────┐     ┌────────────────────┐
+          │   The Odds API   │     │  The Odds API      │
+          │  soccer_spain_   │     │  basketball_nba    │
+          │  la_liga         │     │  (h2h,spreads,     │
+          │  (h2h,totals)    │     │   totals)          │
+          └────────┬─────────┘     └────────┬───────────┘
+                   │                        │
+          ┌────────▼─────────┐     ┌────────▼───────────┐
+          │  API-Football    │     │  API-Sports Basket  │
+          │  Stats, xG       │     │  Standings, H2H     │
+          └────────┬─────────┘     └────────┬───────────┘
+                   │                        │
+                   └────────┬───────────────┘
+                            │
+                   ┌────────▼──────────┐
+                   │   Motor Análisis  │
+                   │  ┌──────────────┐ │
+                   │  │ Poisson/     │ │  Probabilidades
+                   │  │ Normal       │ │  por deporte
+                   │  │ EV Calc      │ │  Valor esperado
+                   │  │ Kelly        │ │  Sizing óptimo
+                   │  └──────────────┘ │
+                   └────────┬──────────┘
+                            │
+              ┌─────────────┼──────────────┐
+              │             │              │
+     ┌────────▼──────┐ ┌───▼────┐ ┌───────▼──────┐
+     │  Telegram Bot  │ │ SQLite │ │  FastAPI +   │
+     │  (inline btns) │ │   DB   │ │  Angular     │
+     └────────────────┘ └────────┘ └──────────────┘
 ```
 
 ---
@@ -90,21 +100,27 @@ Este sistema se inspira en tres pilares:
 ```
 WinStake.ia/
 ├── .env.example           # Template de configuración (API keys)
-├── .gitignore             # Archivos ignorados por Git
-├── requirements.txt       # Dependencias Python
 ├── config.py              # Configuración global y constantes
 ├── main.py                # Entry point — orquesta todo el flujo
-├── README.md              # Esta documentación
+├── scheduler.py           # Scheduler multi-deporte (La Liga + NBA)
 ├── src/
-│   ├── __init__.py
-│   ├── odds_client.py     # Cliente The Odds API (cuotas)
-│   ├── football_client.py # Cliente API-Football (stats)
-│   ├── analyzer.py        # Motor de análisis cuantitativo
-│   ├── formatter.py       # Formateador mensajes Telegram
+│   ├── sports/
+│   │   ├── config.py      # SportConfig: La Liga, NBA
+│   │   └── base.py        # Clases abstractas multi-deporte
+│   ├── odds_client.py     # Cliente The Odds API (cuotas, spreads)
+│   ├── football_client.py # Cliente API-Football (La Liga stats)
+│   ├── nba_client.py      # Cliente API-Sports Basketball (NBA stats)
+│   ├── analyzer.py        # Motor de análisis (enruta Poisson/Normal)
+│   ├── poisson_model.py   # Modelo Poisson (futbol)
+│   ├── normal_model.py    # Modelo Normal (basketball)
+│   ├── ev_calculator.py   # EV + Kelly (futbol y NBA)
+│   ├── formatter.py       # Formateador Telegram (La Liga)
+│   ├── nba_formatter.py   # Formateador Telegram (NBA)
+│   ├── database.py        # SQLite multi-deporte
 │   └── telegram_bot.py    # Bot de Telegram
-└── tests/
-    ├── __init__.py
-    └── test_analyzer.py   # Tests del motor de análisis
+├── app/                   # FastAPI backend (dashboard)
+├── frontend/              # Angular 18 frontend
+└── tests/                 # 149 tests (Poisson, Normal, NBA, DB)
 ```
 
 ---
@@ -143,8 +159,11 @@ cp .env.example .env
 # The Odds API
 ODDS_API_KEY=tu_clave_the_odds_api
 
-# API-Football (RapidAPI)
+# API-Football (RapidAPI) — La Liga
 FOOTBALL_API_KEY=tu_clave_api_football
+
+# API-Sports Basketball — NBA (opcional, solo si usas --sport nba)
+BASKETBALL_API_KEY=tu_clave_api_basketball
 
 # Telegram
 TELEGRAM_BOT_TOKEN=123456789:ABCdefGhIjKlmNoPqRsTuVwXyZ
@@ -162,14 +181,36 @@ TELEGRAM_CHAT_ID=tu_chat_id
 
 ### Ejecución manual
 ```bash
-# En Windows (con el entorno virtual activado):
+# La Liga (default)
 python main.py
-# O directamente:
-.\venv\Scripts\python.exe main.py
+python main.py --sport laliga
+
+# NBA
+python main.py --sport nba
+
+# Opciones
+python main.py --sport nba --mock-mode    # Datos simulados
+python main.py --sport nba --dry-run      # Sin Telegram ni BD
+python main.py --sport nba --output-csv results.csv
+```
+
+### Scheduler automático
+```bash
+python scheduler.py                  # Ambos deportes (La Liga + NBA)
+python scheduler.py --sport nba      # Solo NBA (diario 16:00)
+python scheduler.py --sport laliga   # Solo La Liga (Vie-Dom 09:00)
+python scheduler.py --once --sport nba  # Ejecución única NBA
+```
+
+### API REST (dashboard)
+```bash
+python run_api.py
+# GET /api/v1/analysis?sport=nba     # Análisis NBA
+# GET /api/v1/analysis?sport=laliga  # Análisis La Liga
 ```
 
 ### Modo desarrollo (sin API keys)
-Si no configuras las API keys, el sistema funciona con **datos simulados** basados en la clasificación real de La Liga 2025-26 (Jornada 29). Esto permite probar todo el flujo sin gastar requests.
+Si no configuras las API keys, el sistema funciona con **datos simulados** para ambos deportes. Esto permite probar todo el flujo sin gastar requests.
 
 ### Output esperado
 ```
@@ -195,24 +236,30 @@ Si no configuras las API keys, el sistema funciona con **datos simulados** basad
 
 ## 📊 Metodología Técnica
 
-### 1. Modelo de Poisson
+### 1a. Modelo Poisson (La Liga)
 
-El corazón del sistema. Calcula la probabilidad de cada marcador posible (0-0 hasta 6-6):
-
-```
-P(X = k) = (λ^k × e^-λ) / k!
-```
-
-Donde **λ** (lambda) es el número esperado de goles:
+Calcula la probabilidad de cada marcador posible (0-0 hasta 6-6):
 
 ```
-λ_local = Ataque_local × Defensa_rival × Media_liga × Factor_casa
-λ_visitante = Ataque_visitante × Defensa_rival × Media_liga × Factor_visitante
+P(X = k) = (lambda^k * e^-lambda) / k!
+lambda_local = Ataque_local * Defensa_rival * Media_liga * Factor_casa
 ```
 
-- **Ataque** = GF del equipo / GF medio de la liga
-- **Defensa** = GC del rival / GC medio de la liga
-- **Factor casa** = +25% bonus para local (configurable)
+- Integra Expected Goals (xG) cuando hay datos disponibles
+- Mercados: 1X2, Over/Under, BTTS, Doble Oportunidad, Handicap Asiatico
+
+### 1b. Modelo Normal (NBA)
+
+Para basketball, los scores (~112 pts/equipo) permiten usar distribucion Normal:
+
+```
+Pts_esperados = (PPG_propio + OPP_PPG_rival) / 2 + ventaja_local
+P(home_win) = P(diff > 0) con diff ~ N(spread, std_diff)
+```
+
+- Ajuste por pace (ritmo de juego)
+- Ventaja local: +3 puntos
+- Mercados: Moneyline, Spread, Totals (Over/Under)
 
 ### 2. Expected Value (EV)
 
@@ -254,22 +301,22 @@ Si Edge > 5%, hay una ineficiencia explotable.
 ## 🔌 APIs Utilizadas
 
 ### The Odds API
-- **Propósito:** Cuotas de mercado en tiempo real de múltiples casas de apuestas
-- **Endpoint:** `GET /v4/sports/soccer_spain_la_liga/odds`
-- **Mercados:** h2h (1X2), totals (Over/Under)
+- **Propósito:** Cuotas de mercado en tiempo real
+- **Deportes:** `soccer_spain_la_liga`, `basketball_nba`
+- **Mercados:** h2h, totals, spreads (NBA)
 - **Plan gratuito:** 500 requests/mes
-- **Sitio:** [the-odds-api.com](https://the-odds-api.com)
 
-### API-Football
-- **Propósito:** Clasificación, estadísticas de equipos, historial directo
-- **Endpoints:** `/standings`, `/teams/statistics`, `/fixtures/headtohead`
-- **Plan gratuito:** 100 requests/día via RapidAPI
-- **Sitio:** [api-football.com](https://www.api-football.com)
+### API-Football (La Liga)
+- **Propósito:** Clasificación, estadísticas, xG, H2H
+- **Plan gratuito:** 100 requests/dia via RapidAPI
+
+### API-Sports Basketball (NBA)
+- **Propósito:** Standings, stats de equipos, H2H
+- **Mismo proveedor** que API-Football (API-Sports)
 
 ### Telegram Bot API
 - **Propósito:** Enviar análisis formateados al usuario
-- **Formato:** HTML con emojis y estructura visual
-- **Límite:** 4096 caracteres por mensaje (split automático)
+- **Comandos:** `/laliga`, `/nba`, `/analizar`, `/roi`
 
 ---
 
@@ -277,32 +324,38 @@ Si Edge > 5%, hay una ineficiencia explotable.
 
 Todos los parámetros del modelo se pueden ajustar en `config.py`:
 
-| Parámetro | Default | Descripción |
+| Parametro | Default | Descripcion |
 |-----------|---------|-------------|
-| `HOME_ADVANTAGE` | 0.25 | Bonus de goles para equipo local |
-| `FORM_WEIGHT` | 0.40 | Peso de forma reciente vs temporada |
-| `LEAGUE_AVG_GOALS` | 2.65 | Media de goles por partido en La Liga |
-| `KELLY_CAP` | 0.10 | Máximo stake por apuesta (10%) |
-| `MIN_EV_THRESHOLD` | 0.03 | EV mínimo para recomendar (3%) |
+| `HOME_ADVANTAGE` | 0.18 | Bonus lambda para equipo local (futbol) |
+| `FORM_WEIGHT` | 0.25 | Peso de forma reciente vs temporada |
+| `LEAGUE_AVG_GOALS` | 2.65 | Media de goles/partido La Liga |
+| `KELLY_CAP` | 0.10 | Maximo stake por apuesta (10%) |
+| `MIN_EV_THRESHOLD` | 0.03 | EV minimo para recomendar (3%) |
 | `BANKROLL_UNITS` | 100 | Base de bankroll |
+
+Parametros NBA se configuran en `src/sports/config.py`:
+
+| Parametro | Default | Descripcion |
+|-----------|---------|-------------|
+| `home_advantage` | 0.03 | ~3 puntos ventaja local NBA |
+| `league_avg_score` | 224.0 | Puntos totales/partido NBA |
+| `odds_markets` | h2h,spreads,totals | Mercados NBA |
 
 ---
 
 ## 🧪 Tests
 
 ```bash
-# Ejecutar tests del motor de análisis
-python tests/test_analyzer.py
+python -m pytest tests/ -q
 
-# Tests incluidos:
-# ✅ Probabilidades Poisson suman 100%
-# ✅ Ventaja local con λ mayor
-# ✅ Simetría con λ iguales
-# ✅ EV positivo y negativo
-# ✅ Kelly: normal, cero, capado
-# ✅ Conversión cuotas → probabilidades
-# ✅ Eliminación de overround
-# ✅ Análisis completo de integración
+# 149 tests:
+# - Poisson: probabilidades, lambda, correct score, asian handicap
+# - Normal (NBA): scores, spreads, totals, H2H adjustment
+# - EV Calculator: futbol + NBA markets, correlaciones
+# - Kelly Criterion: sizing, caps, risk levels
+# - Database: save, ROI, pending results, multi-deporte
+# - NBAClient: standings, team search, fuzzy match
+# - Analyzer routing: futbol vs basketball
 ```
 
 ---

@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api_v1.endpoints import analysis
+from app.api_v1.endpoints import analysis, dashboard
 
 app = FastAPI(
     title="WinStake.ia API",
@@ -20,6 +20,7 @@ app.add_middleware(
 
 # ── Routers ──────────────────────────────────────────────
 app.include_router(analysis.router, prefix="/api/v1/analysis", tags=["Analysis"])
+app.include_router(dashboard.router, prefix="/api/dashboard", tags=["Dashboard"])
 # TODO: Registrar auth.router cuando se implementen sus dependencias
 #       (app.db.session, app.core.security, app.schemas.user, app.crud.user)
 

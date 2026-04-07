@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"from app.api_v1.endpoints import analysis; print\\('Endpoint OK'\\)\")",
+      "Bash(python -c ':*)",
+      "Bash(grep -r \"TODO\\\\|FIXME\\\\|WIP\\\\|XXX\\\\|HACK\" /c/Users/davec/OneDrive/Documentos/WinStake.ia/src/*.py /c/Users/davec/OneDrive/Documentos/WinStake.ia/main.py /c/Users/davec/OneDrive/Documentos/WinStake.ia/config.py)",
+      "Bash(wc:*)",
+      "Bash(python main.py --sport nba --mock-mode --dry-run)",
+      "Bash(python main.py --sport laliga --mock-mode --dry-run)",
+      "Bash(python -m pytest tests/ -q)",
+      "Bash(grep -r \"except\" /c/Users/davec/OneDrive/Documentos/WinStake.ia/src/*.py)",
+      "Bash(grep:*)",
+      "Bash(find:*)",
+      "Bash(python -m pytest tests/test_database.py tests/test_nba.py -q)",
+      "Bash(python main.py --sport nba --dry-run)",
+      "Bash(pip install:*)"
+    ]
+  }
+}

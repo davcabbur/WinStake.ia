@@ -2,66 +2,50 @@ import { Component, OnInit, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Subscription } from 'rxjs';
 
-import { SidebarComponent } from '../../core/components/sidebar/sidebar.component';
-import { TopbarComponent } from '../../core/components/topbar/topbar.component';
 import { StatsCardsComponent } from './components/stats-cards/stats-cards.component';
 import { HistoryTableComponent } from './components/history-table/history-table.component';
 import { LiveOddsComponent } from './components/live-odds/live-odds.component';
+import { ProfitChartComponent } from './components/profit-chart/profit-chart.component';
 
-import { ApiService, DashboardStats, BetHistory } from '../../core/services/api.service';
+import { ApiService, DashboardStats, BetHistory, ChartData } from '../../core/services/api.service';
 import { WebsocketService, OddsUpdate } from '../../core/services/websocket.service';
 
 @Component({
   selector: 'app-dashboard',
   standalone: true,
   imports: [
-    CommonModule, 
-    SidebarComponent, 
-    TopbarComponent, 
-    StatsCardsComponent, 
-    HistoryTableComponent, 
-    LiveOddsComponent
+    CommonModule,
+    StatsCardsComponent,
+    HistoryTableComponent,
+    LiveOddsComponent,
+    ProfitChartComponent
   ],
   template: `
-    <div class="dashboard-layout">
-      <!-- Sidebar Navigation -->
-      <app-sidebar></app-sidebar>
-      
-      <!-- Main Content Area -->
-      <div class="dashboard-content">
-        <app-topbar></app-topbar>
-        
-        <div class="content-wrapper">
-          <!-- Stats Top Row -->
-          <app-stats-cards [stats]="stats"></app-stats-cards>
-          
-          <div class="main-grid">
-            <!-- Left Column: History Table -->
-            <div class="history-column">
-              <app-history-table [history]="history"></app-history-table>
-            </div>
-            
-            <!-- Right Column: Live Odds WS -->
-            <div class="live-column">
-              <app-live-odds [data]="liveOddsData"></app-live-odds>
-            </div>
-          </div>
-        </div>
+    <!-- Stats Top Row -->
+    <app-stats-cards [stats]="stats"></app-stats-cards>
+
+    <!-- Profit Chart -->
+    <app-profit-chart [chartData]="chartData"></app-profit-chart>
+
+    <div class="main-grid">
+      <!-- Left Column: History Table -->
+      <div class="history-column">
+        <app-history-table [history]="history"></app-history-table>
+      </div>
+
+      <!-- Right Column: Live Odds WS -->
+      <div class="live-column">
+        <app-live-odds [data]="liveOddsData"></app-live-odds>
       </div>
     </div>
   `,
   styles: [`
-    .content-wrapper {
-      padding: 0 40px 40px 40px;
-      max-width: 1400px;
-    }
-    
     .main-grid {
       display: grid;
       grid-template-columns: 2fr 1fr;
       gap: 32px;
     }
-    
+
     @media (max-width: 1100px) {
       .main-grid {
         grid-template-columns: 1fr;
@@ -72,8 +56,9 @@ import { WebsocketService, OddsUpdate } from '../../core/services/websocket.serv
 export class DashboardComponent implements OnInit, OnDestroy {
   stats: DashboardStats | null = null;
   history: BetHistory[] = [];
+  chartData: ChartData | null = null;
   liveOddsData: OddsUpdate | null = null;
-  
+
   private wsSubscription: Subscription | null = null;
 
   constructor(
@@ -92,9 +77,14 @@ export class DashboardComponent implements OnInit, OnDestroy {
       error: (err) => console.error('Error loading stats', err)
     });
 
-    this.apiService.getHistory().subscribe({
+    this.apiService.getHistory(10).subscribe({
       next: (res) => this.history = res.data,
       error: (err) => console.error('Error loading history', err)
+    });
+
+    this.apiService.getChartData().subscribe({
+      next: (data) => this.chartData = data,
+      error: (err) => console.error('Error loading chart data', err)
     });
   }
 

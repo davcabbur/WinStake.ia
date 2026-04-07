@@ -159,6 +159,73 @@ class EVCalculator:
         else:
             return "Baja"
 
+    def calculate_ev_nba(self, probs, odds: dict) -> list[EVResult]:
+        """
+        Calcula EV para mercados NBA: moneyline, spread, totals.
+
+        Args:
+            probs: NBAMatchProbabilities
+            odds: dict con claves home, away, spread_home, spread_away, over, under
+        """
+        results = []
+
+        outcomes = [
+            # Moneyline
+            ("Home", probs.home_win, odds.get("home")),
+            ("Away", probs.away_win, odds.get("away")),
+            # Spread
+            ("Spread Home", probs.home_cover_prob, odds.get("spread_home")),
+            ("Spread Away", probs.away_cover_prob, odds.get("spread_away")),
+            # Totals
+            ("Over", probs.over_total, odds.get("over")),
+            ("Under", probs.under_total, odds.get("under")),
+        ]
+
+        for name, prob, odd in outcomes:
+            if odd and odd > 1.0 and prob > 0:
+                ev = (prob * odd) - 1.0
+                ev_percent = round(ev * 100, 2)
+                results.append(EVResult(
+                    selection=name,
+                    probability=round(prob, 4),
+                    odds=odd,
+                    ev=round(ev, 4),
+                    ev_percent=ev_percent,
+                    is_value=bool(ev >= self.min_ev),
+                ))
+
+        return results
+
+    @staticmethod
+    def detect_correlated_bets_nba(ev_results: list[EVResult]) -> list[str]:
+        """Detecta value bets correlacionadas en partidos NBA."""
+        value_selections = {r.selection for r in ev_results if r.is_value}
+        if len(value_selections) < 2:
+            return []
+
+        warnings = []
+
+        # Spread + Moneyline son altamente correlacionados
+        if "Home" in value_selections and "Spread Home" in value_selections:
+            warnings.append(
+                "Correlacion: Home ML + Spread Home son redundantes. "
+                "Apostar solo al de mayor EV."
+            )
+        if "Away" in value_selections and "Spread Away" in value_selections:
+            warnings.append(
+                "Correlacion: Away ML + Spread Away son redundantes. "
+                "Apostar solo al de mayor EV."
+            )
+
+        # Over + favorito correlacionados (parcialmente)
+        if ("Home" in value_selections or "Away" in value_selections) and "Over" in value_selections:
+            warnings.append(
+                "Correlacion parcial: Moneyline + Over. "
+                "Reducir stake combinado un 20%."
+            )
+
+        return warnings
+
     @staticmethod
     def detect_correlated_bets(ev_results: list[EVResult]) -> list[str]:
         """

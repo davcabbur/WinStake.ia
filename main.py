@@ -12,10 +12,13 @@ from datetime import datetime
 import config
 from src.odds_client import OddsClient
 from src.football_client import FootballClient
+from src.nba_client import NBAClient
 from src.analyzer import Analyzer
 from src.formatter import Formatter
+from src.nba_formatter import NBAFormatter
 from src.telegram_bot import TelegramSender
 from src.database import Database
+from src.sports.config import get_sport, LALIGA
 
 from src.logger_config import setup_logging
 
@@ -59,6 +62,12 @@ def parse_args(args=None):
         type=int,
         metavar="SEASON",
         help="Ejecutar backtest en una temporada (ej: 23 para 2023/24)",
+    )
+    parser.add_argument(
+        "--sport",
+        type=str,
+        default="laliga",
+        help="Deporte a analizar: laliga, nba (default: laliga)",
     )
     return parser.parse_args(args)
 
@@ -140,7 +149,10 @@ def main(cli_args: list = None):
         return
 
     start_time = datetime.now()
-    logger.info("🚀 WinStake.ia iniciando análisis...")
+
+    # ── 0. Cargar configuración de deporte ───────────────
+    sport = get_sport(args.sport)
+    logger.info(f"🚀 WinStake.ia iniciando análisis — {sport.emoji} {sport.name}...")
 
     if args.dry_run:
         logger.info("   ⚠️  Modo dry-run: sin Telegram ni BD")
@@ -148,14 +160,21 @@ def main(cli_args: list = None):
         logger.info("   🔧 Modo mock: datos simulados")
 
     # ── 1. Inicializar clientes ──────────────────────────
-    odds_client = OddsClient()
-    football_client = FootballClient()
-    analyzer = Analyzer()
-    formatter = Formatter()
+    odds_client = OddsClient(sport_config=sport)
+    analyzer = Analyzer(sport_config=sport)
+
+    is_nba = sport.sport_type == "basketball"
+
+    if is_nba:
+        stats_client = NBAClient()
+        formatter = NBAFormatter()
+    else:
+        stats_client = FootballClient()
+        formatter = Formatter()
 
     if args.mock_mode:
         odds_client._mock_mode = True
-        football_client._mock_mode = True
+        stats_client._mock_mode = True
 
     # ── 2. Obtener cuotas ────────────────────────────────
     logger.info("📊 Obteniendo cuotas de mercado...")
@@ -169,16 +188,18 @@ def main(cli_args: list = None):
 
     # ── 3. Obtener clasificación ─────────────────────────
     logger.info("📈 Obteniendo clasificación y estadísticas...")
-    standings = football_client.get_standings()
+    standings = stats_client.get_standings()
     logger.info(f"   → {len(standings)} equipos en clasificación")
 
-    # Recalibrar media de goles desde datos reales
+    # Recalibrar media desde datos reales
     analyzer.calibrate_from_standings(standings)
 
-    # ── 4. Obtener goleadores ───────────────────────────
-    logger.info("⚽ Obteniendo goleadores de La Liga...")
-    scorers = football_client.get_top_scorers()
-    logger.info(f"   → {len(scorers)} goleadores cargados")
+    # ── 4. Obtener goleadores (solo fútbol) ──────────────
+    scorers = []
+    if not is_nba:
+        logger.info("⚽ Obteniendo goleadores de La Liga...")
+        scorers = stats_client.get_top_scorers()
+        logger.info(f"   → {len(scorers)} goleadores cargados")
 
     # ── 5. Analizar cada partido ─────────────────────────
     logger.info("🧠 Ejecutando análisis cuantitativo...\n")
@@ -191,19 +212,19 @@ def main(cli_args: list = None):
 
         logger.info(f"   Analizando: {home} vs {away}")
 
-        home_stats = football_client.find_team_in_standings(home, standings)
-        away_stats = football_client.find_team_in_standings(away, standings)
+        home_stats = stats_client.find_team_in_standings(home, standings)
+        away_stats = stats_client.find_team_in_standings(away, standings)
 
         h2h_data = []
         if home_stats and away_stats:
             home_id = home_stats.get("team_id")
             away_id = away_stats.get("team_id")
             if home_id and away_id:
-                h2h_data = football_client.get_h2h(home_id, away_id)
+                h2h_data = stats_client.get_h2h(home_id, away_id)
                 if h2h_data:
                     logger.info(f"      📜 H2H: {len(h2h_data)} enfrentamientos previos")
 
-        match_scorers = football_client.get_players_for_match(home, away, scorers)
+        match_scorers = stats_client.get_players_for_match(home, away, scorers) if not is_nba else None
 
         analysis = analyzer.analyze_match(
             home_team=home,
@@ -233,7 +254,7 @@ def main(cli_args: list = None):
         saved_count = 0
         value_saved = 0
         for analysis in analyses:
-            db.save_analysis(analysis)
+            db.save_analysis(analysis, sport=sport.key)
             saved_count += 1
             if analysis.best_bet and analysis.best_bet.is_value:
                 value_saved += 1
