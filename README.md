@@ -26,6 +26,8 @@ WinStake.ia es un sistema de análisis cuantitativo multi-deporte que:
 4. **Detecta value bets** donde el mercado infravalora un resultado
 5. **Recomienda sizing** con el criterio de Kelly
 6. **Envía análisis** automáticamente a Telegram
+7. **Visualiza datos** en un **Dashboard Web (Angular + FastAPI)** en tiempo real
+8. **Valida estrategias** usando un **Motor de Backtesting Histórico**
 
 **Deportes soportados:**
 - **La Liga** — Modelo Poisson, mercados 1X2, Over/Under, BTTS, Doble Oportunidad
@@ -117,7 +119,8 @@ WinStake.ia/
 │   ├── formatter.py       # Formateador Telegram (La Liga)
 │   ├── nba_formatter.py   # Formateador Telegram (NBA)
 │   ├── database.py        # SQLite multi-deporte
-│   └── telegram_bot.py    # Bot de Telegram
+│   ├── telegram_bot.py    # Bot de Telegram
+│   └── backtester/        # Motor de backtesting histórico y evaluación
 ├── app/                   # FastAPI backend (dashboard)
 ├── frontend/              # Angular 18 frontend
 └── tests/                 # 149 tests (Poisson, Normal, NBA, DB)
@@ -192,6 +195,10 @@ python main.py --sport nba
 python main.py --sport nba --mock-mode    # Datos simulados
 python main.py --sport nba --dry-run      # Sin Telegram ni BD
 python main.py --sport nba --output-csv results.csv
+
+# Backtesting
+python main.py --backtest 24               # Backtest temporada 2024/25
+python main.py --verify                    # Verificar resultados pendientes
 ```
 
 ### Scheduler automático
