@@ -15,6 +15,38 @@ logger = logging.getLogger(__name__)
 
 NBA_SEASON = "2025-26"
 
+# Mapeo nombre completo → abreviación ESPN (mismas que stats.nba.com)
+NBA_ESPN_ABBR: dict[str, str] = {
+    "atlanta hawks": "ATL", "boston celtics": "BOS", "brooklyn nets": "BKN",
+    "charlotte hornets": "CHA", "chicago bulls": "CHI", "cleveland cavaliers": "CLE",
+    "dallas mavericks": "DAL", "denver nuggets": "DEN", "detroit pistons": "DET",
+    "golden state warriors": "GSW", "houston rockets": "HOU", "indiana pacers": "IND",
+    "los angeles clippers": "LAC", "los angeles lakers": "LAL", "memphis grizzlies": "MEM",
+    "miami heat": "MIA", "milwaukee bucks": "MIL", "minnesota timberwolves": "MIN",
+    "new orleans pelicans": "NOP", "new york knicks": "NYK", "oklahoma city thunder": "OKC",
+    "orlando magic": "ORL", "philadelphia 76ers": "PHI", "phoenix suns": "PHX",
+    "portland trail blazers": "POR", "sacramento kings": "SAC", "san antonio spurs": "SAS",
+    "toronto raptors": "TOR", "utah jazz": "UTA", "washington wizards": "WAS",
+}
+
+# Alias alternativos que puede venir de The Odds API
+_ABBR_ALIASES: dict[str, str] = {
+    "la lakers": "LAL", "la clippers": "LAC", "gs warriors": "GSW",
+    "okc thunder": "OKC", "sa spurs": "SAS", "no pelicans": "NOP",
+    "nola pelicans": "NOP", "76ers": "PHI", "sixers": "PHI",
+    "blazers": "POR", "trail blazers": "POR", "wolves": "MIN",
+    "timberwolves": "MIN", "knicks": "NYK", "nets": "BKN",
+    "cavaliers": "CLE", "cavs": "CLE", "bucks": "MIL",
+    "celtics": "BOS", "suns": "PHX", "nuggets": "DEN",
+    "grizzlies": "MEM", "mavericks": "DAL", "mavs": "DAL",
+    "rockets": "HOU", "heat": "MIA", "bulls": "CHI",
+    "raptors": "TOR", "hawks": "ATL", "magic": "ORL",
+    "pistons": "DET", "hornets": "CHA", "jazz": "UTA",
+    "wizards": "WAS", "pacers": "IND", "kings": "SAC",
+    "lakers": "LAL", "clippers": "LAC", "warriors": "GSW",
+    "thunder": "OKC", "spurs": "SAS", "pelicans": "NOP",
+}
+
 
 class NBAClient:
     """Cliente para estadísticas NBA via nba_api."""
@@ -107,7 +139,8 @@ class NBAClient:
                 pts = int(game["PTS"])
                 wl = game["WL"]
                 # Estimar puntos del rival desde +/-
-                plus_minus = int(game["PLUS_MINUS"]) if game["PLUS_MINUS"] else 0
+                pm_val = game.get("PLUS_MINUS") if hasattr(game, "get") else game["PLUS_MINUS"] if "PLUS_MINUS" in game.index else 0
+                plus_minus = int(pm_val) if pm_val and str(pm_val) not in ("", "nan") else 0
                 opp_pts = pts - plus_minus
 
                 if is_home:
@@ -188,6 +221,262 @@ class NBAClient:
 
         logger.warning(f"Equipo NBA no encontrado en standings: {team_name}")
         return None
+
+    def get_player_stats_for_teams(self, team_ids: list[int]) -> dict:
+        """
+        Obtiene puntos/rebotes/asistencias/triples por jugador para los equipos dados.
+        Devuelve {team_id: [{"player_name", "pts_season", "reb_season", "ast_season",
+                              "fg3m_season", "pts_l10", "reb_l10", "ast_l10", "fg3m_l10", ...}]}
+        Hace 2 llamadas a stats.nba.com: media de temporada + últimos 10 partidos.
+        """
+        if not team_ids:
+            return {}
+
+        cache_key = f"nba_player_props_{NBA_SEASON}"
+        cached = self.cache.get(cache_key, 3600)
+        if cached is not None:
+            # JSON serializa claves int como str — normalizar
+            return {tid: cached.get(str(tid), cached.get(tid, [])) for tid in team_ids}
+
+        try:
+            from nba_api.stats.endpoints import leaguedashplayerstats
+
+            # 1. Media de temporada completa
+            time.sleep(0.6)
+            season_raw = leaguedashplayerstats.LeagueDashPlayerStats(
+                season=NBA_SEASON,
+                per_mode_detailed="PerGame",
+                last_n_games=0,
+            )
+            season_df = season_raw.get_data_frames()[0]
+
+            # 2. Media últimos 10 partidos
+            time.sleep(0.6)
+            l10_raw = leaguedashplayerstats.LeagueDashPlayerStats(
+                season=NBA_SEASON,
+                per_mode_detailed="PerGame",
+                last_n_games=10,
+            )
+            l10_df = l10_raw.get_data_frames()[0]
+
+            # Indexar L10 por player_id para búsqueda rápida
+            l10_index = {int(row["PLAYER_ID"]): row for _, row in l10_df.iterrows()}
+
+            # Agrupar por team_id
+            all_teams: dict[int, list[dict]] = {}
+            for _, row in season_df.iterrows():
+                tid = int(row["TEAM_ID"])
+                pid = int(row["PLAYER_ID"])
+                gp = int(row.get("GP", 0))
+                if gp < 8:  # Ignorar jugadores con muy pocos partidos
+                    continue
+
+                player: dict = {
+                    "player_id": pid,
+                    "player_name": str(row["PLAYER_NAME"]),
+                    "gp_season": gp,
+                    "pts_season":  round(float(row.get("PTS",  0)), 1),
+                    "reb_season":  round(float(row.get("REB",  0)), 1),
+                    "ast_season":  round(float(row.get("AST",  0)), 1),
+                    "fg3m_season": round(float(row.get("FG3M", 0)), 1),
+                    "stl_season":  round(float(row.get("STL",  0)), 1),
+                    "blk_season":  round(float(row.get("BLK",  0)), 1),
+                }
+
+                l10 = l10_index.get(pid)
+                if l10 is not None:
+                    player.update({
+                        "gp_l10":   int(l10.get("GP", 0)),
+                        "pts_l10":  round(float(l10.get("PTS",  0)), 1),
+                        "reb_l10":  round(float(l10.get("REB",  0)), 1),
+                        "ast_l10":  round(float(l10.get("AST",  0)), 1),
+                        "fg3m_l10": round(float(l10.get("FG3M", 0)), 1),
+                        "stl_l10":  round(float(l10.get("STL",  0)), 1),
+                        "blk_l10":  round(float(l10.get("BLK",  0)), 1),
+                    })
+                else:
+                    player.update({"gp_l10": 0, "pts_l10": 0.0, "reb_l10": 0.0,
+                                   "ast_l10": 0.0, "fg3m_l10": 0.0,
+                                   "stl_l10": 0.0, "blk_l10": 0.0})
+
+                all_teams.setdefault(str(tid), []).append(player)
+
+            # Ordenar por PPG de temporada y guardar en caché (claves str para JSON)
+            for k in all_teams:
+                all_teams[k].sort(key=lambda p: p["pts_season"], reverse=True)
+
+            self.cache.set(cache_key, all_teams)
+            logger.info(f"Player props NBA: {len(all_teams)} equipos cargados")
+            return {tid: all_teams.get(str(tid), []) for tid in team_ids}
+
+        except Exception as e:
+            logger.warning(f"Error obteniendo player props NBA: {e}")
+            return {tid: [] for tid in team_ids}
+
+    def get_defense_vs_position(self, team_id: int) -> dict:
+        """
+        Retorna cuántos PTS/REB/AST/3PM concede este equipo a cada posición (G/F/C).
+        Ejemplo: {"G": {"pts": 28.5, "reb": 4.1, "ast": 6.0, "fg3m": 2.2}, ...}
+        """
+        cache_key = f"nba_dvp_{team_id}_{NBA_SEASON}"
+        cached = self.cache.get(cache_key, 86400)
+        if cached is not None:
+            return cached
+
+        result = {}
+        try:
+            from nba_api.stats.endpoints import leaguedashplayerstats
+            for pos in ("G", "F", "C"):
+                time.sleep(0.5)
+                r = leaguedashplayerstats.LeagueDashPlayerStats(
+                    season=NBA_SEASON,
+                    per_mode_detailed="PerGame",
+                    opponent_team_id=team_id,
+                    player_position_abbreviation_nullable=pos,
+                    last_n_games=0,
+                    timeout=30,
+                )
+                df = r.get_data_frames()[0]
+                if df.empty:
+                    continue
+                # Filtrar jugadores con al menos 3 juegos vs este equipo (muestra representativa)
+                df = df[df["GP"] >= 2]
+                if df.empty:
+                    continue
+                result[pos] = {
+                    "pts":  round(float(df["PTS"].mean()),  1),
+                    "reb":  round(float(df["REB"].mean()),  1),
+                    "ast":  round(float(df["AST"].mean()),  1),
+                    "fg3m": round(float(df["FG3M"].mean()), 1),
+                    "stl":  round(float(df["STL"].mean()),  2),
+                    "blk":  round(float(df["BLK"].mean()),  2),
+                    "games": int(df["GP"].sum()),
+                }
+            self.cache.set(cache_key, result)
+            logger.info(f"DvP cargado para team_id={team_id}: {list(result.keys())}")
+        except Exception as e:
+            logger.warning(f"Error obteniendo DvP para team_id={team_id}: {e}")
+        return result
+
+    def get_team_last10(self, team_id: int) -> list[dict]:
+        """Retorna los últimos 10 partidos del equipo con resultado y puntos."""
+        cache_key = f"nba_last10_{team_id}_{NBA_SEASON}"
+        cached = self.cache.get(cache_key, 21600)
+        if cached is not None:
+            return cached
+
+        try:
+            from nba_api.stats.endpoints import teamgamelog
+            time.sleep(0.5)
+            log = teamgamelog.TeamGameLog(team_id=team_id, season=NBA_SEASON, timeout=30)
+            df = log.get_data_frames()[0].head(10)
+
+            games = []
+            for _, row in df.iterrows():
+                matchup = str(row["MATCHUP"])
+                is_home = "vs." in matchup
+                pts = int(row["PTS"])
+                wl = str(row["WL"])
+                # Estimar puntos rival
+                pm_raw = row.get("PLUS_MINUS") if hasattr(row, "get") else None
+                if pm_raw is None and "PLUS_MINUS" in row.index:
+                    pm_raw = row["PLUS_MINUS"]
+                plus_minus = int(pm_raw) if pm_raw is not None and str(pm_raw) not in ("", "nan", "None") else 0
+                opp_pts = pts - plus_minus
+
+                opponent = matchup.split("vs. ")[-1] if is_home else matchup.split("@ ")[-1]
+                games.append({
+                    "date": str(row["GAME_DATE"]),
+                    "opponent": opponent.strip(),
+                    "home": is_home,
+                    "pts": pts,
+                    "opp_pts": opp_pts,
+                    "win": wl == "W",
+                })
+            self.cache.set(cache_key, games)
+            return games
+        except Exception as e:
+            logger.warning(f"Error obteniendo últimos 10 partidos team_id={team_id}: {e}")
+            return []
+
+    def get_injuries(self) -> dict:
+        """
+        Obtiene lesiones NBA desde la API pública de ESPN.
+        Retorna {team_abbrev: [{"player", "status", "detail"}]}
+        """
+        cache_key = "nba_injuries_espn"
+        cached = self.cache.get(cache_key, 3600)
+        if cached is not None:
+            return cached
+
+        try:
+            import httpx
+            url = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/injuries"
+            resp = httpx.get(url, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+
+            result = {}
+            for team_entry in data.get("injuries", []):
+                abbr = team_entry.get("team", {}).get("abbreviation", "")
+                players = []
+                for inj in team_entry.get("injuries", []):
+                    athlete = inj.get("athlete", {})
+                    players.append({
+                        "player": athlete.get("displayName", ""),
+                        "status": inj.get("status", ""),
+                        "detail": inj.get("details", {}).get("detail", ""),
+                    })
+                if players:
+                    result[abbr] = players
+            self.cache.set(cache_key, result)
+            logger.info(f"Lesiones NBA: {len(result)} equipos con bajas")
+            return result
+        except Exception as e:
+            logger.warning(f"Error obteniendo lesiones NBA: {e}")
+            return {}
+
+    def get_player_positions(self, team_id: int) -> dict:
+        """
+        Retorna {player_id: "G"|"F"|"C"} para el roster actual del equipo.
+        """
+        cache_key = f"nba_positions_{team_id}_{NBA_SEASON}"
+        cached = self.cache.get(cache_key, 86400)
+        if cached is not None:
+            # JSON convierte claves int a str — devolver con int
+            return {int(k): v for k, v in cached.items()}
+
+        try:
+            from nba_api.stats.endpoints import commonteamroster
+            time.sleep(0.5)
+            r = commonteamroster.CommonTeamRoster(team_id=team_id, season=NBA_SEASON, timeout=30)
+            df = r.get_data_frames()[0]
+            result = {}
+            for _, row in df.iterrows():
+                pid = int(row["PLAYER_ID"])
+                pos_raw = str(row.get("POSITION", "F"))
+                # "G-F" → "G", "C-F" → "C", etc.
+                primary = pos_raw.split("-")[0].strip().upper()
+                result[pid] = primary if primary in ("G", "F", "C") else "F"
+            self.cache.set(cache_key, result)
+            return result
+        except Exception as e:
+            logger.warning(f"Error obteniendo posiciones team_id={team_id}: {e}")
+            return {}
+
+    @staticmethod
+    def get_espn_abbr(team_name: str) -> str:
+        """Devuelve la abreviación ESPN estándar de un equipo NBA."""
+        lower = team_name.lower().strip()
+        # Exact / substring match in full names
+        for canonical, abbr in NBA_ESPN_ABBR.items():
+            if canonical in lower or lower in canonical:
+                return abbr
+        # Alias match (single-word nicknames, etc.)
+        for alias, abbr in _ABBR_ALIASES.items():
+            if alias in lower:
+                return abbr
+        return ""
 
     def get_top_scorers(self) -> list[dict]:
         """NBA no usa goleadores individuales para el modelo."""

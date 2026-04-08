@@ -19,12 +19,103 @@ import config
 from src.database import Database
 from src.odds_client import OddsClient
 from src.football_client import FootballClient
+from src.nba_client import NBAClient
 from src.analyzer import Analyzer
 from src.formatter import Formatter
+from src.nba_formatter import NBAFormatter
 from src.sports.config import get_sport, SPORTS, SportConfig, LALIGA
+from src.nba_props import generate_prop_recommendations
+from src.ev_calculator import EVResult
 from src.logger_config import setup_logging
 
 logger = setup_logging("WinStakeBot")
+
+# Umbral PPG para considerar a un jugador como "estrella"
+_STAR_PPG_THRESHOLD = 18.0
+
+
+def _apply_injury_impact(analysis, home_players: list, away_players: list, import_config) -> None:
+    """
+    Detecta jugadores estrella lesionados (Out/Doubtful) y:
+    1. Añade injury_alerts al análisis para mostrarlos en la cajita de lesiones.
+    2. Ajusta el EV del mejor pick automáticamente si el equipo recomendado tiene bajas.
+       - Out confirmado (≥18 PPG): EV ×0.60
+       - Doubtful/Questionable (≥18 PPG): EV ×0.80
+    """
+    player_map: dict[str, dict] = {}
+    for p in home_players + away_players:
+        player_map[p["player_name"].lower()] = p
+
+    def _find_player(inj_name: str):
+        low = inj_name.lower()
+        for key, p in player_map.items():
+            if low in key or key in low:
+                return p
+        return None
+
+    alerts = []
+    for side in ("home", "away"):
+        team_name = analysis.home_team if side == "home" else analysis.away_team
+        for inj in analysis.injuries.get(side, []):
+            status_raw = inj.get("status", "")
+            status_low = status_raw.lower()
+            if not any(s in status_low for s in ("out", "doubtful", "questionable")):
+                continue
+            p = _find_player(inj["player"])
+            ppg = p["pts_season"] if p else 0.0
+            alerts.append({
+                "player": inj["player"],
+                "team": team_name,
+                "status": status_raw,
+                "detail": inj.get("detail", ""),
+                "ppg": ppg,
+                "is_star": ppg >= _STAR_PPG_THRESHOLD,
+            })
+
+    analysis.injury_alerts = sorted(alerts, key=lambda x: x["ppg"], reverse=True)
+
+    # Ajuste de EV si la apuesta recomendada es sobre un equipo con baja estrella
+    if not analysis.best_bet or not analysis.best_bet.is_value:
+        return
+
+    sel = analysis.best_bet.selection  # "Home", "Away", "Spread Home", "Spread Away"
+    is_home_bet = sel in ("Home", "Spread Home")
+    team_with_bet = analysis.home_team if is_home_bet else analysis.away_team
+    side_with_bet = "home" if is_home_bet else "away"
+
+    discount = 1.0
+    for alert in analysis.injury_alerts:
+        if alert["team"] != team_with_bet or not alert["is_star"]:
+            continue
+        status_low = alert["status"].lower()
+        if "out" in status_low:
+            discount = min(discount, 0.60)
+        elif "doubtful" in status_low:
+            discount = min(discount, 0.80)
+        elif "questionable" in status_low:
+            discount = min(discount, 0.90)
+
+    if discount < 1.0:
+        old_ev = analysis.best_bet.ev
+        new_ev = old_ev * discount
+        new_ev_pct = round(new_ev * 100, 2)
+        analysis.best_bet = EVResult(
+            selection=analysis.best_bet.selection,
+            probability=analysis.best_bet.probability,
+            odds=analysis.best_bet.odds,
+            ev=round(new_ev, 4),
+            ev_percent=new_ev_pct,
+            is_value=bool(new_ev >= import_config.MIN_EV_THRESHOLD),
+            line=analysis.best_bet.line,
+        )
+        if not analysis.best_bet.is_value:
+            analysis.recommendation = "No apostar"
+            analysis.confidence = "—"
+        stars_out = [a["player"] for a in analysis.injury_alerts if a["team"] == team_with_bet and a["is_star"]]
+        analysis.insights.insert(0,
+            f"⚠️ EV ajustado x{discount:.0%} por lesiones en {team_with_bet}: "
+            + ", ".join(stars_out)
+        )
 
 
 def _run_analysis_for_jornada(sport_config: SportConfig = None) -> dict:
@@ -34,7 +125,12 @@ def _run_analysis_for_jornada(sport_config: SportConfig = None) -> dict:
     """
     sc = sport_config or LALIGA
     odds_client = OddsClient(sport_config=sc)
-    football_client = FootballClient()
+    
+    if sc.sport_type == "basketball":
+        stats_client = NBAClient()
+    else:
+        stats_client = FootballClient()
+        
     analyzer = Analyzer(sport_config=sc)
 
     # 1. Obtener cuotas
@@ -43,13 +139,15 @@ def _run_analysis_for_jornada(sport_config: SportConfig = None) -> dict:
         raise RuntimeError("No se obtuvieron partidos. Verifica tu ODDS_API_KEY.")
 
     # 2. Obtener clasificación
-    standings = football_client.get_standings()
+    standings = stats_client.get_standings()
 
     # 3. Recalibrar modelo con datos reales
     analyzer.calibrate_from_standings(standings)
 
-    # 4. Obtener goleadores
-    scorers = football_client.get_top_scorers()
+    # 4. Obtener goleadores (Si aplica)
+    scorers = []
+    if hasattr(stats_client, 'get_top_scorers'):
+        scorers = stats_client.get_top_scorers()
 
     # 5. Analizar cada partido
     analyses = {}
@@ -59,18 +157,20 @@ def _run_analysis_for_jornada(sport_config: SportConfig = None) -> dict:
         odds = match["avg_odds"]
         match_id = match.get("id", f"{home}_{away}")
 
-        home_stats = football_client.find_team_in_standings(home, standings)
-        away_stats = football_client.find_team_in_standings(away, standings)
+        home_stats = stats_client.find_team_in_standings(home, standings)
+        away_stats = stats_client.find_team_in_standings(away, standings)
 
         h2h_data = []
         if home_stats and away_stats:
             home_id = home_stats.get("team_id")
             away_id = away_stats.get("team_id")
             if home_id and away_id:
-                h2h_data = football_client.get_h2h(home_id, away_id)
+                h2h_data = stats_client.get_h2h(home_id, away_id)
 
         # Goleadores del partido
-        match_scorers = football_client.get_players_for_match(home, away, scorers)
+        match_scorers = []
+        if scorers and hasattr(stats_client, 'get_players_for_match'):
+            match_scorers = stats_client.get_players_for_match(home, away, scorers)
 
         analysis = analyzer.analyze_match(
             home_team=home,
@@ -85,7 +185,74 @@ def _run_analysis_for_jornada(sport_config: SportConfig = None) -> dict:
         )
         analyses[match_id] = analysis
 
-    # 6. Guardar en BD
+    # 6. NBA — Player props, DvP, últimos 10, lesiones
+    if sc.sport_type == "basketball":
+        # Recoger team_ids de todos los partidos
+        match_team_ids: dict[str, tuple] = {}
+        for match in matches_odds:
+            mid = match.get("id", f"{match['home_team']}_{match['away_team']}")
+            hs = stats_client.find_team_in_standings(match["home_team"], standings)
+            as_ = stats_client.find_team_in_standings(match["away_team"], standings)
+            match_team_ids[mid] = (
+                hs.get("team_id") if hs else None,
+                as_.get("team_id") if as_ else None,
+            )
+        all_tids = list({tid for h, a in match_team_ids.values() for tid in (h, a) if tid})
+
+        # Stats de jugadores (temporada + L10)
+        player_stats = stats_client.get_player_stats_for_teams(all_tids)
+
+        # Lesiones (1 sola llamada para todos los partidos)
+        injuries_data = stats_client.get_injuries()
+
+        for mid, (home_tid, away_tid) in match_team_ids.items():
+            if mid not in analyses:
+                continue
+            a = analyses[mid]
+
+            # Player props (stats)
+            home_players = player_stats.get(home_tid, []) if home_tid else []
+            away_players = player_stats.get(away_tid, []) if away_tid else []
+            a.player_props = {"home": home_players, "away": away_players}
+
+            # Últimos 10 partidos
+            a.team_last10 = {
+                "home": stats_client.get_team_last10(home_tid) if home_tid else [],
+                "away": stats_client.get_team_last10(away_tid) if away_tid else [],
+            }
+
+            # DvP (Defense vs Position)
+            home_dvp = stats_client.get_defense_vs_position(home_tid) if home_tid else {}
+            away_dvp = stats_client.get_defense_vs_position(away_tid) if away_tid else {}
+
+            # Posiciones de jugadores
+            home_positions = stats_client.get_player_positions(home_tid) if home_tid else {}
+            away_positions = stats_client.get_player_positions(away_tid) if away_tid else {}
+
+            # Lesiones por equipo — usar abreviaciones ESPN correctas
+            home_abbr = stats_client.get_espn_abbr(a.home_team)
+            away_abbr = stats_client.get_espn_abbr(a.away_team)
+            a.injuries = {
+                "home": injuries_data.get(home_abbr, []),
+                "away": injuries_data.get(away_abbr, []),
+            }
+
+            # ── Alertas de lesiones clave + ajuste automático de EV ──
+            _apply_injury_impact(a, home_players, away_players, import_config=config)
+
+            # Recomendaciones de props
+            a.prop_recommendations = generate_prop_recommendations(
+                home_team=a.home_team,
+                away_team=a.away_team,
+                home_players=home_players,
+                away_players=away_players,
+                home_dvp=home_dvp,
+                away_dvp=away_dvp,
+                home_positions=home_positions,
+                away_positions=away_positions,
+            )
+
+    # 7. Guardar en BD
     db = Database()
     for analysis in analyses.values():
         db.save_analysis(analysis, sport=sc.key)
@@ -156,11 +323,11 @@ async def _analizar_sport(update: Update, context: ContextTypes.DEFAULT_TYPE, sp
             await update.message.reply_text("❌ No se encontraron partidos para analizar.")
             return
 
-        # Guardar en caché para este chat
-        _jornada_cache[chat_id] = {"analyses": analyses, "sport": sport}
+        # Construir teclado inline (devuelve también la lista ordenada)
+        keyboard, sorted_matches = _build_match_keyboard(analyses, sport)
 
-        # Construir teclado inline
-        keyboard = _build_match_keyboard(analyses, sport)
+        # Guardar en caché para este chat
+        _jornada_cache[chat_id] = {"analyses": analyses, "sport": sport, "sorted_matches": sorted_matches}
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         n_total = len(analyses)
@@ -184,12 +351,16 @@ async def _analizar_sport(update: Update, context: ContextTypes.DEFAULT_TYPE, sp
         await update.message.reply_text("❌ Hubo un error ejecutando el análisis. Revisa los logs.")
 
 
-def _build_match_keyboard(analyses: dict, sport: SportConfig) -> list:
-    """Construye teclado inline con botones de partidos."""
+def _build_match_keyboard(analyses: dict, sport: SportConfig) -> tuple[list, list]:
+    """Construye teclado inline con botones de partidos.
+
+    Devuelve (keyboard, sorted_matches) donde sorted_matches es la lista
+    ordenada usada para que los índices del callback coincidan.
+    """
     keyboard = []
     sorted_analyses = sorted(analyses.values(), key=lambda a: a.commence_time or "")
 
-    for a in sorted_analyses:
+    for i, a in enumerate(sorted_analyses):
         if a.best_bet and a.best_bet.is_value:
             icon = "✅"
             ev_text = f" | EV: {a.best_bet.ev_percent:+.1f}%"
@@ -206,15 +377,14 @@ def _build_match_keyboard(analyses: dict, sport: SportConfig) -> list:
                 pass
 
         button_text = f"{icon} {a.home_team} vs {a.away_team}{date_str}{ev_text}"
-        callback_data = f"match:{a.match_id}"
-
-        if len(callback_data.encode('utf-8')) > 64:
-            callback_data = f"match:{a.match_id[:50]}"
+        callback_data = f"match:{i}"  # índice numérico, siempre < 64 bytes
 
         keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
 
     keyboard.append([InlineKeyboardButton("📊 Ver Resumen Ejecutivo", callback_data="summary")])
-    return keyboard
+    if sport.sport_type == "basketball":
+        keyboard.append([InlineKeyboardButton("🎰 Combinada Recomendada", callback_data="parlay")])
+    return keyboard, sorted_analyses
 
 
 async def analizar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -249,7 +419,7 @@ async def match_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cache = _jornada_cache[chat_id]
     analyses = cache["analyses"]
     sport = cache["sport"]
-    formatter = Formatter()
+    formatter = NBAFormatter() if sport.sport_type == "basketball" else Formatter()
 
     if data == "summary":
         summary = formatter._format_summary(list(analyses.values()))
@@ -259,13 +429,18 @@ async def match_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data.startswith("match:"):
-        match_id = data[6:]
+        try:
+            idx = int(data[6:])
+        except ValueError:
+            await query.message.reply_text("⚠️ Datos de partido inválidos.")
+            return
 
-        if match_id not in analyses:
+        sorted_matches = cache.get("sorted_matches", [])
+        if idx < 0 or idx >= len(sorted_matches):
             await query.message.reply_text("⚠️ Partido no encontrado en el análisis actual.")
             return
 
-        analysis = analyses[match_id]
+        analysis = sorted_matches[idx]
         msg = formatter.format_single_match(analysis)
 
         back_button = InlineKeyboardMarkup([
@@ -285,8 +460,28 @@ async def match_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
         return
 
+    if data == "parlay":
+        from src.nba_formatter import NBAFormatter as _NBA
+        from src.database import Database as _DB
+        try:
+            _roi = _DB().get_roi_summary(sport="nba")
+        except Exception:
+            _roi = None
+        msg = _NBA().format_parlay(list(analyses.values()), roi_summary=_roi)
+        chunks = _split_message(msg)
+        back_button = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⬅️ Volver a la jornada", callback_data="back_to_jornada")]
+        ])
+        for i, chunk in enumerate(chunks):
+            markup = back_button if i == len(chunks) - 1 else None
+            try:
+                await query.message.reply_html(chunk, disable_web_page_preview=True, reply_markup=markup)
+            except Exception:
+                await query.message.reply_text(_strip_html(chunk), reply_markup=markup)
+        return
+
     if data == "back_to_jornada":
-        keyboard = _build_match_keyboard(analyses, sport)
+        keyboard, _ = _build_match_keyboard(analyses, sport)
 
         n_total = len(analyses)
         n_value = sum(1 for a in analyses.values() if a.best_bet and a.best_bet.is_value)

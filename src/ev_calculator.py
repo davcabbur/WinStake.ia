@@ -22,6 +22,7 @@ class EVResult:
     ev: float = 0.0
     ev_percent: float = 0.0
     is_value: bool = False
+    line: Optional[float] = None
 
 
 @dataclass
@@ -171,28 +172,54 @@ class EVCalculator:
 
         outcomes = [
             # Moneyline
-            ("Home", probs.home_win, odds.get("home")),
-            ("Away", probs.away_win, odds.get("away")),
+            ("Home", probs.home_win, odds.get("home"), None),
+            ("Away", probs.away_win, odds.get("away"), None),
             # Spread
-            ("Spread Home", probs.home_cover_prob, odds.get("spread_home")),
-            ("Spread Away", probs.away_cover_prob, odds.get("spread_away")),
+            ("Spread Home", probs.home_cover_prob, odds.get("spread_home"), odds.get("spread_line")),
+            ("Spread Away", probs.away_cover_prob, odds.get("spread_away"), -odds.get("spread_line") if odds.get("spread_line") is not None else None),
             # Totals
-            ("Over", probs.over_total, odds.get("over")),
-            ("Under", probs.under_total, odds.get("under")),
+            ("Over", probs.over_total, odds.get("over"), odds.get("total_line")),
+            ("Under", probs.under_total, odds.get("under"), odds.get("total_line")),
         ]
 
-        for name, prob, odd in outcomes:
-            if odd and odd > 1.0 and prob > 0:
-                ev = (prob * odd) - 1.0
-                ev_percent = round(ev * 100, 2)
-                results.append(EVResult(
-                    selection=name,
-                    probability=round(prob, 4),
-                    odds=odd,
-                    ev=round(ev, 4),
-                    ev_percent=ev_percent,
-                    is_value=bool(ev >= self.min_ev),
-                ))
+        for name, prob, odd, line in outcomes:
+            if not (odd and odd > 1.0 and prob > 0):
+                continue
+
+            ev = (prob * odd) - 1.0
+            ev_percent = round(ev * 100, 2)
+
+            is_value = bool(ev >= self.min_ev)
+
+            # ── Filtros de cordura para moneyline NBA ──────────
+            if name in ("Home", "Away") and is_value:
+                market_implied = 1.0 / odd
+
+                # 1. No recomendar underdogs extremos (odds > 4.0):
+                #    nuestro modelo carece de resolución para ese rango
+                if odd > 4.0:
+                    is_value = False
+
+                # 2. No recomendar favoritos aplastantes (odds < 1.20):
+                #    el payout es tan bajo que nunca hay valor real
+                elif odd < 1.20:
+                    is_value = False
+
+                # 3. Ratio de discrepancia: si el modelo es >2.5× más
+                #    optimista que el mercado, probablemente la diferencia
+                #    se debe a información que no tenemos (lesiones, etc.)
+                elif market_implied > 0 and (prob / market_implied) > 2.5:
+                    is_value = False
+
+            results.append(EVResult(
+                selection=name,
+                probability=round(prob, 4),
+                odds=odd,
+                ev=round(ev, 4),
+                ev_percent=ev_percent,
+                is_value=is_value,
+                line=line,
+            ))
 
         return results
 

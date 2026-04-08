@@ -46,6 +46,11 @@ class MatchAnalysis:
     # Mercados NBA
     spread_lines: list = field(default_factory=list)
     total_lines: list = field(default_factory=list)
+    player_props: dict = field(default_factory=dict)      # {"home": [...], "away": [...]}
+    prop_recommendations: list = field(default_factory=list)  # lista de props recomendados
+    team_last10: dict = field(default_factory=dict)       # {"home": [...], "away": [...]}
+    injuries: dict = field(default_factory=dict)          # {"home": [...], "away": [...]}
+    injury_alerts: list = field(default_factory=list)    # jugadores clave lesionados [{player, team, status, ppg}]
 
 
 class Analyzer:

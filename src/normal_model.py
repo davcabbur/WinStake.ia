@@ -132,9 +132,10 @@ class NormalModel:
             home_expected *= pace_adj
             away_expected *= pace_adj
 
-            # Ventaja local (~3 puntos en NBA)
-            home_expected += 1.5  # +1.5 al local
-            away_expected -= 1.5  # -1.5 al visitante
+            # Ventaja local (calculada dinámicamente)
+            ha_points = self.home_advantage * avg_ppg
+            home_expected += ha_points / 2
+            away_expected -= ha_points / 2
 
             # Desviación estándar ajustada por consistencia del equipo
             home_std = self.team_std_dev * max(0.8, min(1.3,
@@ -192,9 +193,30 @@ class NormalModel:
         diff = home_score - away_score  # Positivo = home favorito
         std_diff = (std_home**2 + std_away**2) ** 0.5
 
-        # P(home win) = P(diff > 0) — no hay empate en NBA
-        home_win = norm.sf(0, loc=diff, scale=std_diff)
-        away_win = 1.0 - home_win
+        # P(home win) — base del modelo de standings
+        home_win_model = norm.sf(0, loc=diff, scale=std_diff)
+
+        # ── Calibración con spread de mercado ──────────────────
+        # El spread incorpora información que el modelo no tiene (lesiones,
+        # descanso, forma reciente, motivación...). Cuanto mayor el spread,
+        # más nos fiamos del mercado frente al modelo de standings.
+        #
+        # Fórmula empírica NBA: cada punto de spread ≈ 2.85% de prob de victoria
+        #   P(home) ≈ 0.50 + |spread| × 0.0285   (desde el punto de vista del favorito)
+        if market_spread != 0:
+            # market_spread < 0 → home es favorito; > 0 → away es favorito
+            spread_implied_home = 0.50 + (-market_spread) * 0.0285
+            spread_implied_home = max(0.02, min(0.98, spread_implied_home))
+
+            # Peso del mercado: sube de 0% (spread=0) a 90% (spread≥20 pts)
+            market_weight = min(abs(market_spread) / 20.0, 0.90)
+
+            home_win = (1.0 - market_weight) * home_win_model + market_weight * spread_implied_home
+        else:
+            home_win = home_win_model
+
+        home_win = round(max(0.02, min(0.98, home_win)), 4)
+        away_win = round(1.0 - home_win, 4)
 
         # Total esperado
         total = home_score + away_score

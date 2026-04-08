@@ -1,13 +1,14 @@
 import logging
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from src.odds_client import OddsClient
 from src.football_client import FootballClient
 from src.nba_client import NBAClient
 from src.analyzer import Analyzer
 from src.sports.config import get_sport, SPORTS
+from app.core.api_key import require_api_key
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_api_key)])
 logger = logging.getLogger("WinStakeAPI")
 
 

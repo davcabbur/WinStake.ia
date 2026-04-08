@@ -11,9 +11,10 @@ __pycache__/
 dist/
 build/
 
-# IDE
+# IDE & Local
 .vscode/
 .idea/
+.claude/
 *.swp
 *.swo
 
@@ -21,8 +22,11 @@ build/
 Thumbs.db
 .DS_Store
 
-# Logs
+# Logs & Outputs
 *.log
+*.txt
+!requirements.txt
+!README.md
 
 # Database
 data/

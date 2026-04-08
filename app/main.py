@@ -1,3 +1,4 @@
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -9,10 +10,15 @@ app = FastAPI(
     version="1.0.0",
 )
 
+# Leer orígenes permitidos desde el entorno (separados por coma)
+# Por defecto permite el servidor dev de Angular
+cors_origins_str = os.getenv("CORS_ORIGINS", "http://localhost:4200")
+cors_origins = [origin.strip() for origin in cors_origins_str.split(",") if origin.strip()]
+
 # Configuración CORS (Asegurar puertos de Angular/PWA permitidos)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:4200"],  # Angular dev server por defecto
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

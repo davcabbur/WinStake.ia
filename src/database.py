@@ -8,6 +8,7 @@ import logging
 import os
 from datetime import datetime
 from typing import Optional
+from contextlib import contextmanager
 
 from src.analyzer import MatchAnalysis
 from src.ev_calculator import EVCalculator, KellyResult
@@ -28,18 +29,21 @@ class Database:
         self.db_path = db_path
         self._init_db()
 
-    def _get_conn(self) -> sqlite3.Connection:
+    @contextmanager
+    def _get_conn(self):
         """Crea una conexión con row_factory para acceso por nombre."""
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA foreign_keys=ON")
-        return conn
+        try:
+            yield conn
+        finally:
+            conn.close()
 
     def _init_db(self):
         """Crea las tablas si no existen."""
-        conn = self._get_conn()
-        try:
+        with self._get_conn() as conn:
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS analyses (
                     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -74,6 +78,7 @@ class Database:
                     kelly_half      REAL,
                     stake_units     REAL,
                     confidence      TEXT,
+                    line            REAL,
                     FOREIGN KEY (analysis_id) REFERENCES analyses(id)
                 );
 
@@ -100,8 +105,6 @@ class Database:
             self._migrate_add_sport_column(conn)
             conn.commit()
             logger.info(f"✅ Base de datos inicializada en {self.db_path}")
-        finally:
-            conn.close()
 
     @staticmethod
     def _migrate_add_sport_column(conn: sqlite3.Connection):
@@ -113,6 +116,13 @@ class Database:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN sport TEXT NOT NULL DEFAULT 'laliga'")
                 logger.info(f"📦 Migración: columna 'sport' añadida a {table}")
                 migrated = True
+
+        vb_cols = [row[1] for row in conn.execute("PRAGMA table_info(value_bets)").fetchall()]
+        if "line" not in vb_cols:
+            conn.execute("ALTER TABLE value_bets ADD COLUMN line REAL")
+            logger.info("📦 Migración: columna 'line' añadida a value_bets")
+            migrated = True
+
         # Crear índices de sport (idempotente)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_analyses_sport ON analyses(sport)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_value_bets_sport ON value_bets(sport)")
@@ -126,86 +136,88 @@ class Database:
         Guarda un análisis completo y sus value bets asociadas.
         Retorna el ID del análisis insertado.
         """
-        conn = self._get_conn()
-        try:
-            conn.execute("BEGIN")
+        with self._get_conn() as conn:
+            try:
+                conn.execute("BEGIN")
 
-            p = analysis.probabilities
-            odds = analysis.market_odds
+                p = analysis.probabilities
+                odds = analysis.market_odds
 
-            # Extraer campos de forma compatible con ambos modelos
-            # Football: MatchProbabilities tiene lambda_home/away, over_25, etc.
-            # NBA: NBAMatchProbabilities tiene home_score/away_score, over_total, etc.
-            lambda_home = getattr(p, "lambda_home", None) or getattr(p, "home_score", None)
-            lambda_away = getattr(p, "lambda_away", None) or getattr(p, "away_score", None)
-            prob_draw = getattr(p, "draw", 0.0)
-            prob_over25 = getattr(p, "over_25", None) or getattr(p, "over_total", None)
-            prob_under25 = getattr(p, "under_25", None) or getattr(p, "under_total", None)
+                # Extraer campos de forma compatible con ambos modelos
+                # Football: MatchProbabilities tiene lambda_home/away, over_25, etc.
+                # NBA: NBAMatchProbabilities tiene home_score/away_score, over_total, etc.
+                lambda_home = getattr(p, "lambda_home", None) or getattr(p, "home_score", None)
+                lambda_away = getattr(p, "lambda_away", None) or getattr(p, "away_score", None)
+                prob_draw = getattr(p, "draw", 0.0)
+                prob_over25 = getattr(p, "over_25", None) or getattr(p, "over_total", None)
+                prob_under25 = getattr(p, "under_25", None) or getattr(p, "under_total", None)
 
-            cursor = conn.execute("""
-                INSERT INTO analyses (
-                    run_date, sport, home_team, away_team, commence_time,
-                    lambda_home, lambda_away,
-                    prob_home, prob_draw, prob_away, prob_over25, prob_under25,
-                    odds_home, odds_draw, odds_away, odds_over25, odds_under25,
-                    recommendation, confidence
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                datetime.now().isoformat(),
-                sport,
-                analysis.home_team,
-                analysis.away_team,
-                analysis.commence_time,
-                lambda_home,
-                lambda_away,
-                p.home_win,
-                prob_draw,
-                p.away_win,
-                prob_over25,
-                prob_under25,
-                odds.get("home"),
-                odds.get("draw"),
-                odds.get("away"),
-                odds.get("over_25") or odds.get("over"),
-                odds.get("under_25") or odds.get("under"),
-                analysis.recommendation,
-                analysis.confidence,
-            ))
-
-            analysis_id = cursor.lastrowid
-
-            # Guardar TODAS las value bets del partido
-            for ev in analysis.ev_results:
-                if not ev.is_value:
-                    continue
-                kelly = self._ev_calc_kelly(ev.probability, ev.odds)
-                confidence = self._classify_ev(ev.ev_percent)
-                conn.execute("""
-                    INSERT INTO value_bets (
-                        analysis_id, sport, selection, probability, odds,
-                        ev_percent, kelly_full, kelly_half, stake_units, confidence
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                cursor = conn.execute("""
+                    INSERT INTO analyses (
+                        run_date, sport, home_team, away_team, commence_time,
+                        lambda_home, lambda_away,
+                        prob_home, prob_draw, prob_away, prob_over25, prob_under25,
+                        odds_home, odds_draw, odds_away, odds_over25, odds_under25,
+                        recommendation, confidence
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
-                    analysis_id,
+                    datetime.now().isoformat(),
                     sport,
-                    ev.selection,
-                    ev.probability,
-                    ev.odds,
-                    ev.ev_percent,
-                    kelly.kelly_full,
-                    kelly.kelly_half,
-                    kelly.stake_units,
-                    confidence,
+                    analysis.home_team,
+                    analysis.away_team,
+                    analysis.commence_time,
+                    lambda_home,
+                    lambda_away,
+                    p.home_win,
+                    prob_draw,
+                    p.away_win,
+                    prob_over25,
+                    prob_under25,
+                    odds.get("home"),
+                    odds.get("draw"),
+                    odds.get("away"),
+                    odds.get("over_25") or odds.get("over"),
+                    odds.get("under_25") or odds.get("under"),
+                    analysis.recommendation,
+                    analysis.confidence,
                 ))
 
-            conn.commit()
-            return analysis_id
+                analysis_id = cursor.lastrowid
 
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
+                # Inicializar calculadora EV una vez por partido
+                ev_calc = EVCalculator()
+
+                # Guardar TODAS las value bets del partido
+                for ev in analysis.ev_results:
+                    if not ev.is_value:
+                        continue
+                    kelly = ev_calc.kelly_criterion(ev.probability, ev.odds)
+                    confidence = self._classify_ev(ev.ev_percent)
+                    conn.execute("""
+                        INSERT INTO value_bets (
+                            analysis_id, sport, selection, probability, odds,
+                            ev_percent, kelly_full, kelly_half, stake_units, confidence, line
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        analysis_id,
+                        sport,
+                        ev.selection,
+                        ev.probability,
+                        ev.odds,
+                        ev.ev_percent,
+                        kelly.kelly_full,
+                        kelly.kelly_half,
+                        kelly.stake_units,
+                        confidence,
+                        ev.line,
+                    ))
+
+                conn.commit()
+                return analysis_id
+
+            except Exception:
+                conn.rollback()
+                raise
 
     # ── Registrar resultados reales ───────────────────────────
 
@@ -219,11 +231,10 @@ class Database:
         Registra el resultado real de un partido y calcula profit/loss.
         Retorna el profit en unidades.
         """
-        conn = self._get_conn()
-        try:
+        with self._get_conn() as conn:
             # Obtener la value bet
             row = conn.execute(
-                "SELECT selection, odds, stake_units FROM value_bets WHERE id = ?",
+                "SELECT selection, odds, stake_units, line FROM value_bets WHERE id = ?",
                 (value_bet_id,)
             ).fetchone()
 
@@ -234,9 +245,10 @@ class Database:
             selection = row["selection"]
             odds = row["odds"]
             stake = row["stake_units"]
+            line = row["line"]
 
             # Determinar si ganó
-            bet_won = self._check_bet_won(selection, home_goals, away_goals)
+            bet_won = self._check_bet_won(selection, home_goals, away_goals, line)
             profit = (stake * (odds - 1)) if bet_won else -stake
 
             conn.execute("""
@@ -255,20 +267,12 @@ class Database:
             logger.info(f"{icon} Resultado registrado: bet #{value_bet_id} → {profit:+.1f}u")
             return profit
 
-        finally:
-            conn.close()
-
-    @staticmethod
-    def _ev_calc_kelly(probability: float, odds: float) -> KellyResult:
-        """Calcula Kelly para una value bet individual."""
-        return EVCalculator().kelly_criterion(probability, odds)
-
     @staticmethod
     def _classify_ev(ev_percent: float) -> str:
         return EVCalculator.classify_confidence(ev_percent)
 
     @staticmethod
-    def _check_bet_won(selection: str, home_goals: int, away_goals: int) -> bool:
+    def _check_bet_won(selection: str, home_goals: int, away_goals: int, line: Optional[float] = None) -> bool:
         """Determina si una apuesta ganó basándose en el resultado real."""
         sel = selection.lower().strip()
         total = home_goals + away_goals
@@ -318,17 +322,28 @@ class Database:
         elif sel == "away":
             return away_win
 
-        # NBA Spread (requiere datos de spread, simplificado a ML)
+        # NBA Spread
         elif sel == "spread home":
+            if line is not None:
+                # spread_line is home's handicap. e.g. -5.5
+                return (home_goals + line) > away_goals
             return home_win
+
         elif sel == "spread away":
+            if line is not None:
+                # line is away's handicap. e.g. if home is -5.5, away line is +5.5 stored in DB
+                return (away_goals + line) > home_goals
             return away_win
 
-        # NBA Totals (genérico, usa total > línea estándar)
+        # NBA Totals
         elif sel == "over":
-            return total > 0  # Necesita línea real para evaluar
+            if line is not None:
+                return total > line
+            return total > 220
         elif sel == "under":
-            return False  # Necesita línea real para evaluar
+            if line is not None:
+                return total < line
+            return total < 220
 
         return False
 
@@ -339,8 +354,7 @@ class Database:
         Calcula el ROI basado en resultados registrados.
         Si sport es None, devuelve ROI global de todos los deportes.
         """
-        conn = self._get_conn()
-        try:
+        with self._get_conn() as conn:
             query = """
                 SELECT
                     COUNT(*) as total_bets,
@@ -372,13 +386,10 @@ class Database:
                 "roi_percent": round(total_profit / total_staked * 100, 2) if total_staked > 0 else 0,
                 "avg_ev": round(rows["avg_ev"] or 0, 2),
             }
-        finally:
-            conn.close()
 
     def get_pending_results(self) -> list[dict]:
         """Obtiene value bets sin resultado registrado (pendientes de verificar)."""
-        conn = self._get_conn()
-        try:
+        with self._get_conn() as conn:
             rows = conn.execute("""
                 SELECT
                     vb.id as bet_id,
@@ -397,13 +408,10 @@ class Database:
             """).fetchall()
 
             return [dict(row) for row in rows]
-        finally:
-            conn.close()
 
     def get_recent_analyses(self, limit: int = 20) -> list[dict]:
         """Obtiene los análisis más recientes."""
-        conn = self._get_conn()
-        try:
+        with self._get_conn() as conn:
             rows = conn.execute("""
                 SELECT
                     a.*,
@@ -417,13 +425,10 @@ class Database:
             """, (limit,)).fetchall()
 
             return [dict(row) for row in rows]
-        finally:
-            conn.close()
 
     def get_stats_by_selection(self) -> list[dict]:
         """ROI desglosado por tipo de selección (Local, Empate, Visitante, etc.)."""
-        conn = self._get_conn()
-        try:
+        with self._get_conn() as conn:
             rows = conn.execute("""
                 SELECT
                     vb.selection,
@@ -439,5 +444,3 @@ class Database:
             """).fetchall()
 
             return [dict(row) for row in rows]
-        finally:
-            conn.close()

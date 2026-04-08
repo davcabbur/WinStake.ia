@@ -4,11 +4,12 @@ Serves stats, history, and chart data to the Angular frontend.
 """
 
 import logging
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
 from src.database import Database
+from app.core.api_key import require_api_key
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_api_key)])
 logger = logging.getLogger("WinStakeAPI")
 
 
@@ -36,8 +37,7 @@ def get_bet_history(
 ):
     """Paginated bet history with results."""
     db = _get_db()
-    conn = db._get_conn()
-    try:
+    with db._get_conn() as conn:
         rows = conn.execute("""
             SELECT
                 a.run_date,
@@ -67,16 +67,13 @@ def get_bet_history(
             data.append(d)
 
         return {"data": data, "limit": limit, "offset": offset}
-    finally:
-        conn.close()
 
 
 @router.get("/chart-data")
 def get_chart_data():
     """Cumulative profit over time for the profit chart."""
     db = _get_db()
-    conn = db._get_conn()
-    try:
+    with db._get_conn() as conn:
         rows = conn.execute("""
             SELECT
                 DATE(a.run_date) as date,
@@ -98,8 +95,6 @@ def get_chart_data():
             cumulative_profit.append(round(running, 2))
 
         return {"dates": dates, "cumulative_profit": cumulative_profit}
-    finally:
-        conn.close()
 
 
 @router.get("/analysis-results")
