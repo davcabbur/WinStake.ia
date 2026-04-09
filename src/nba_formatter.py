@@ -695,10 +695,18 @@ class NBAFormatter:
             matchup = f"{a.home_team} vs {a.away_team}"
             lines.append(f"- <b>{matchup}</b>")
 
+            # Fallback: si best_bet es None, usar el EV result con mayor prob disponible
             if b is None or _PICK_TYPE.get(b.selection) is None:
-                lines.append("  (Datos insuficientes para este partido)")
-                lines.append("")
-                continue
+                ev_results = getattr(a, "ev_results", [])
+                valid = [r for r in ev_results if _PICK_TYPE.get(r.selection)]
+                if valid:
+                    b = max(valid, key=lambda r: r.probability)
+                else:
+                    # Sin ningún dato útil — Tendencia forzada hacia local
+                    lines.append("  Ganador: (modelo sin datos suficientes) @ N/D (Prob: N/D)")
+                    lines.append("  Stake: 0u | Conf: Tendencia")
+                    lines.append("")
+                    continue
 
             prob_pct = round(b.probability * 100, 1)
             ev_over_limit = b.ev_percent > EV_SUSPICIOUS_THRESHOLD
@@ -756,10 +764,13 @@ class NBAFormatter:
                 )
                 lines.append(f"  Stake: {stake:.1f}u | Conf: {conf_label}")
             else:
-                lines.append(f"  {pick_desc} @ {b.odds:.2f} (Prob: {prob_pct}%)")
-                if ev_over_limit:
-                    lines.append("  ⚠️ Discrepancia excesiva con mercado")
-                lines.append("  Stake: 0u | Conf: Tendencia")
+                # Tendencia: EV siempre en primera línea, warning inline con Stake
+                lines.append(
+                    f"  {pick_desc} @ {b.odds:.2f} "
+                    f"(Prob: {prob_pct}% | EV: {b.ev_percent:+.1f}%)"
+                )
+                warn_str = " ⚠️ Discrepancia excesiva con mercado" if ev_over_limit else ""
+                lines.append(f"  Stake: 0u | Conf: Tendencia{warn_str}")
 
             lines.append("")
 
