@@ -703,14 +703,14 @@ class NBAFormatter:
 
             if not eligible:
                 lines.append(f"- <b>{matchup}</b>")
-                lines.append("  Sin recomendación clara")
+                lines.append("  Sin recomendación clara en este partido")
                 lines.append("")
                 continue
 
             # ── Límite de picks y exposición ─────────────────────
             if picks_shown >= MAX_PICKS_SUMMARY:
                 lines.append(f"- <b>{matchup}</b>")
-                lines.append("  Sin recomendación clara")
+                lines.append("  Sin recomendación clara en este partido")
                 lines.append("")
                 continue
 
@@ -727,7 +727,7 @@ class NBAFormatter:
             stake = round(stake, 1)
             if stake <= 0:
                 lines.append(f"- <b>{matchup}</b>")
-                lines.append("  Sin recomendación clara (exposición máxima alcanzada)")
+                lines.append("  Sin recomendación clara en este partido (exposición máxima alcanzada)")
                 lines.append("")
                 continue
 
@@ -769,7 +769,7 @@ class NBAFormatter:
             if ev_discrepancy:
                 market_impl = round((1 / b.odds) * 100, 1)
                 lines.append(
-                    f"  ⚠️ Discrepancia modelo/mercado "
+                    f"  ⚠️ Alta discrepancia con mercado "
                     f"(Modelo: {prob_pct}% vs Mercado: {market_impl}%) — stake reducido"
                 )
             lines.append(f"  Stake: {stake:.1f}u | Conf: {conf_label}")
