@@ -38,12 +38,25 @@ _STAR_PPG_THRESHOLD = 18.0
 
 def _apply_injury_impact(analysis, home_players: list, away_players: list, import_config) -> None:
     """
-    Detecta jugadores estrella lesionados (Out/Doubtful) y:
-    1. Añade injury_alerts al análisis para mostrarlos en la cajita de lesiones.
-    2. Ajusta el EV del mejor pick automáticamente si el equipo recomendado tiene bajas.
-       - Out confirmado (≥18 PPG): EV ×0.60
-       - Doubtful/Questionable (≥18 PPG): EV ×0.80
+    Detecta jugadores estrella lesionados y aplica dos capas de ajuste:
+
+    CAPA 1 — Alertas:
+      Construye injury_alerts con PPG real del jugador para mostrar en el reporte.
+
+    CAPA 2 — Ajuste de scores proyectados (total):
+      Reduce home_score / away_score proporcionalmente al PPG perdido por lesiones.
+      Replacement rate 30%: otros jugadores absorben ~30% del PPG perdido.
+      Floor: nunca reducir más del 25% del score base.
+      Recalcula over_total / under_total con distribución Normal ajustada.
+
+    CAPA 3 — Ajuste de EV por tipo de apuesta:
+      - ML / Spread: descuento sobre el equipo apostado (igual que antes).
+      - Over: usa la nueva probabilidad ajustada del modelo (capa 2).
+      - Under: lesiones favorecen el Under → no penalizar, actualizar probabilidad.
     """
+    from scipy.stats import norm as _norm
+
+    # ── Construir mapa jugador → stats ───────────────────────────────────
     player_map: dict[str, dict] = {}
     for p in home_players + away_players:
         player_map[p["player_name"].lower()] = p
@@ -55,6 +68,7 @@ def _apply_injury_impact(analysis, home_players: list, away_players: list, impor
                 return p
         return None
 
+    # ── CAPA 1: Alertas ──────────────────────────────────────────────────
     alerts = []
     for side in ("home", "away"):
         team_name = analysis.home_team if side == "home" else analysis.away_team
@@ -76,14 +90,113 @@ def _apply_injury_impact(analysis, home_players: list, away_players: list, impor
 
     analysis.injury_alerts = sorted(alerts, key=lambda x: x["ppg"], reverse=True)
 
-    # Ajuste de EV si la apuesta recomendada es sobre un equipo con baja estrella
-    if not analysis.best_bet or not analysis.best_bet.is_value:
+    # ── CAPA 2: Ajuste de scores proyectados ─────────────────────────────
+    # Out = 100% de PPG perdido; Doubtful = 50%; Questionable = no ajustar
+    _REPLACEMENT_RATE = 0.30   # otros jugadores absorben ~30% del PPG perdido
+    _SCORE_FLOOR     = 0.75    # nunca reducir más del 25% del score base
+
+    ppg_lost_home = sum(
+        a["ppg"] * (1.0 if "out" in a["status"].lower() else 0.5)
+        for a in alerts
+        if a["team"] == analysis.home_team
+        and ("out" in a["status"].lower() or "doubtful" in a["status"].lower())
+    )
+    ppg_lost_away = sum(
+        a["ppg"] * (1.0 if "out" in a["status"].lower() else 0.5)
+        for a in alerts
+        if a["team"] == analysis.away_team
+        and ("out" in a["status"].lower() or "doubtful" in a["status"].lower())
+    )
+
+    probs = analysis.probabilities
+    orig_total = probs.home_score + probs.away_score
+    adj_home = probs.home_score
+    adj_away = probs.away_score
+    scores_adjusted = False
+
+    if ppg_lost_home >= 5.0:
+        net_loss = ppg_lost_home * (1.0 - _REPLACEMENT_RATE)
+        adj_home = max(probs.home_score - net_loss, probs.home_score * _SCORE_FLOOR)
+        scores_adjusted = True
+
+    if ppg_lost_away >= 5.0:
+        net_loss = ppg_lost_away * (1.0 - _REPLACEMENT_RATE)
+        adj_away = max(probs.away_score - net_loss, probs.away_score * _SCORE_FLOOR)
+        scores_adjusted = True
+
+    if scores_adjusted:
+        adj_total = adj_home + adj_away
+        std_total = (probs.std_home**2 + probs.std_away**2) ** 0.5
+        market_total = probs.market_total or analysis.market_odds.get("total_line", adj_total)
+
+        new_over = round(float(_norm.sf(market_total, loc=adj_total, scale=std_total)), 4)
+        new_under = round(1.0 - new_over, 4)
+
+        analysis.probabilities = dataclass_replace(
+            probs,
+            home_score=round(adj_home, 1),
+            away_score=round(adj_away, 1),
+            total_score=round(adj_total, 1),
+            over_total=new_over,
+            under_total=new_under,
+        )
+        probs = analysis.probabilities  # actualizar referencia
+
+        loss_parts = []
+        if ppg_lost_home >= 5.0:
+            loss_parts.append(f"{analysis.home_team} −{ppg_lost_home:.0f}pts")
+        if ppg_lost_away >= 5.0:
+            loss_parts.append(f"{analysis.away_team} −{ppg_lost_away:.0f}pts")
+        analysis.insights.insert(0,
+            f"🏥 Total ajustado: {orig_total:.0f} → {adj_total:.0f} pts "
+            f"({', '.join(loss_parts)})"
+        )
+        logger.info(
+            f"[Lesiones] {analysis.home_team} vs {analysis.away_team}: "
+            f"total {orig_total:.0f} → {adj_total:.0f} "
+            f"| Over prob {probs.over_total:.3f}"
+        )
+
+    # ── CAPA 3: Ajuste de EV por tipo de apuesta ─────────────────────────
+    if not analysis.best_bet or not (analysis.best_bet.is_value or analysis.best_bet.is_marginal):
         return
 
-    sel = analysis.best_bet.selection  # "Home", "Away", "Spread Home", "Spread Away"
+    sel = analysis.best_bet.selection
+
+    # Over / Under — re-evaluar directamente con la nueva probabilidad del modelo
+    if sel in ("Over", "Under"):
+        if scores_adjusted:
+            new_prob = probs.over_total if sel == "Over" else probs.under_total
+            new_ev = (new_prob * analysis.best_bet.odds) - 1.0
+            new_ev_pct = round(new_ev * 100, 2)
+            new_is_value = bool(new_ev >= import_config.MIN_EV_THRESHOLD)
+            new_is_marginal = bool(
+                import_config.MARGINAL_EV_THRESHOLD <= new_ev < import_config.MIN_EV_THRESHOLD
+                and not new_is_value
+            )
+            analysis.best_bet = dataclass_replace(
+                analysis.best_bet,
+                probability=round(new_prob, 4),
+                ev=round(new_ev, 4),
+                ev_percent=new_ev_pct,
+                is_value=new_is_value,
+                is_marginal=new_is_marginal,
+            )
+            if not new_is_value and not new_is_marginal:
+                analysis.recommendation = "No apostar"
+                analysis.confidence = "—"
+            stars_all = [a["player"] for a in alerts if a["is_star"]]
+            if stars_all:
+                analysis.insights.insert(0,
+                    f"⚠️ {sel} re-evaluado por bajas: "
+                    + ", ".join(stars_all[:3])
+                    + f" → EV {new_ev_pct:+.1f}%"
+                )
+        return  # Para Over/Under terminamos aquí
+
+    # ML / Spread — descuento sobre el equipo apostado
     is_home_bet = sel in ("Home", "Spread Home")
     team_with_bet = analysis.home_team if is_home_bet else analysis.away_team
-    side_with_bet = "home" if is_home_bet else "away"
 
     discount = 1.0
     for alert in analysis.injury_alerts:
@@ -98,10 +211,8 @@ def _apply_injury_impact(analysis, home_players: list, away_players: list, impor
             discount = min(discount, 0.90)
 
     if discount < 1.0:
-        old_ev = analysis.best_bet.ev
-        new_ev = old_ev * discount
+        new_ev = analysis.best_bet.ev * discount
         new_ev_pct = round(new_ev * 100, 2)
-        # Improvement 9: use dataclasses.replace() instead of manual reconstruction
         analysis.best_bet = dataclass_replace(
             analysis.best_bet,
             ev=round(new_ev, 4),
@@ -111,7 +222,10 @@ def _apply_injury_impact(analysis, home_players: list, away_players: list, impor
         if not analysis.best_bet.is_value:
             analysis.recommendation = "No apostar"
             analysis.confidence = "—"
-        stars_out = [a["player"] for a in analysis.injury_alerts if a["team"] == team_with_bet and a["is_star"]]
+        stars_out = [
+            a["player"] for a in analysis.injury_alerts
+            if a["team"] == team_with_bet and a["is_star"]
+        ]
         analysis.insights.insert(0,
             f"⚠️ EV ajustado x{discount:.0%} por lesiones en {team_with_bet}: "
             + ", ".join(stars_out)
