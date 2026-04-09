@@ -708,6 +708,27 @@ class NBAFormatter:
                     lines.append("")
                     continue
 
+            # ── ¿Está el ML bloqueado para este partido? ──────────
+            # Si CUALQUIER equipo tiene cuota ML > 2.50, Moneyline queda
+            # completamente prohibido. Pivota ANTES de construir el pick.
+            market = getattr(a, "market_odds", {})
+            home_ml = market.get("home") or 0.0
+            away_ml = market.get("away") or 0.0
+            partido_ml_bloqueado = max(home_ml, away_ml) > MAX_MONEYLINE_ODDS
+
+            if partido_ml_bloqueado and b.selection in ("Home", "Away"):
+                # Pivote real: sustituir best_bet por el mejor Spread/Totales disponible
+                ev_results = getattr(a, "ev_results", [])
+                alternativas = [
+                    r for r in ev_results
+                    if r.selection in ("Spread Home", "Spread Away", "Over", "Under")
+                ]
+                if alternativas:
+                    b = max(alternativas, key=lambda r: r.ev_percent)
+                # Si no hay alternativas, b sigue siendo el ML pero irá como Tendencia
+
+            ml_bloqueado = partido_ml_bloqueado and b.selection in ("Home", "Away")
+
             prob_pct = round(b.probability * 100, 1)
             ev_over_limit = b.ev_percent > EV_SUSPICIOUS_THRESHOLD
 
@@ -731,17 +752,6 @@ class NBAFormatter:
             else:
                 direction = "Over" if b.selection == "Over" else "Under"
                 pick_desc = f"Totales: {direction}"
-
-            # ── ¿Está el ML bloqueado para este partido? ──────────
-            # Si CUALQUIER equipo tiene cuota ML > 2.50, Moneyline queda
-            # completamente prohibido: el modelo pivota a Spread/Totales.
-            market = getattr(a, "market_odds", {})
-            home_ml = market.get("home") or 0.0
-            away_ml = market.get("away") or 0.0
-            ml_bloqueado = (
-                b.selection in ("Home", "Away")
-                and max(home_ml, away_ml) > MAX_MONEYLINE_ODDS
-            )
 
             # ── Clasificar: PICK OFICIAL o TENDENCIA ─────────────
             es_oficial = (
