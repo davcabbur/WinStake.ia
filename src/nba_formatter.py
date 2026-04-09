@@ -1,6 +1,6 @@
 """
-WinStake.ia v2.6 — Formateador NBA para Telegram
-Bot conservador: blend modelo-mercado, EV realista, props con MPG filter.
+WinStake.ia v2.9 — Formateador NBA para Telegram
+Bot conservador: resumen ejecutivo solo ganadores/spread/totals, stake cap 3u, exposición ≤15u.
 """
 
 import logging
@@ -11,7 +11,7 @@ _SPAIN_TZ = ZoneInfo("Europe/Madrid")
 
 logger = logging.getLogger(__name__)
 
-VERSION = "v2.6"
+VERSION = "v2.9"
 MODEL_TAG = "Normal Distribution + DvP | Kelly ½ | Blend modelo-mercado aplicado"
 
 # ── Límites de cuota combinada ────────────────────────────────
@@ -22,8 +22,24 @@ AGG_ODDS_MIN    = 4.50
 AGG_ODDS_MAX    = 7.50
 AGG_ODDS_HARD   = 8.00   # nunca superar
 
-# EV a partir del cual se muestra advertencia de discrepancia con mercado
-EV_MARKET_WARNING_THRESHOLD = 35.0
+# ── Límites v2.9 ──────────────────────────────────────────────
+MAX_STAKE_PER_PICK  = 3.0   # máximo stake por pick individual
+MAX_EXPOSURE_WARN   = 12.0  # aviso si exposición supera este umbral
+MAX_EXPOSURE_HARD   = 15.0  # nunca superar (caps automáticamente)
+EV_MARKET_WARNING_THRESHOLD = 40.0  # EV > 40% → advertencia de discrepancia
+
+# ── Mapeo de selecciones a tipos de pick legibles ─────────────
+_PICK_TYPE: dict[str, str] = {
+    "Home":        "Ganador",
+    "Away":        "Ganador",
+    "Spread Home": "Spread",
+    "Spread Away": "Spread",
+    "Over":        "Over/Under",
+    "Under":       "Over/Under",
+}
+
+# Selecciones consideradas props — NUNCA van en el Resumen Ejecutivo
+_PROP_SELECTIONS = {"pts", "reb", "ast", "3pm", "sb", "pra", "fg3m", "blk", "stl"}
 
 
 # ─────────────────────────────────────────────────────────────
@@ -214,7 +230,7 @@ def _injury_impact_text(status: str, ppg: float) -> str:
 # ─────────────────────────────────────────────────────────────
 
 class NBAFormatter:
-    """Formatea análisis NBA para Telegram (WinStake.ia v2.5)."""
+    """Formatea análisis NBA para Telegram (WinStake.ia v2.9)."""
 
     PARSE_MODE = "HTML"
 
@@ -634,7 +650,7 @@ class NBAFormatter:
         if not value_bets and not all_props:
             lines.append("❌ No hay picks con valor suficiente hoy.")
 
-        # ── Footer exacto v2.6 ────────────────────────────────
+        # ── Footer v2.9 ───────────────────────────────────────
         roi_str = _roi_str(roi_summary)
         lines.append("─" * 32)
         lines.append("⚠️ <i>Cuotas estimadas. Verifica siempre en tu casa de apuestas.</i>")
@@ -646,38 +662,84 @@ class NBAFormatter:
         )
         return "\n".join(lines)
 
-    # ── Resumen ejecutivo ─────────────────────────────────────
+    # ── Resumen ejecutivo v2.9 ────────────────────────────────
 
     def _format_summary(self, analyses: list) -> str:
+        """
+        RESUMEN EJECUTIVO v2.9: solo Ganador / Spread / Over-Under.
+        Sin props. Stake cap 3.0u. Exposición máx 15u.
+        EV > 40% con mercado parejo → advertencia de discrepancia.
+        """
         lines = ["\n<b>RESUMEN EJECUTIVO NBA</b>\n"]
+
+        # Filtrar: solo picks de tipo moneyline / spread / totals (no props)
         value_bets = sorted(
-            [a for a in analyses if a.best_bet and a.best_bet.is_value],
+            [
+                a for a in analyses
+                if a.best_bet
+                and a.best_bet.is_value
+                and a.best_bet.selection not in _PROP_SELECTIONS
+                and _PICK_TYPE.get(a.best_bet.selection)  # debe estar en el mapa
+            ],
             key=lambda a: a.best_bet.ev_percent, reverse=True,
         )
-        no_bets = [a for a in analyses if not a.best_bet or not a.best_bet.is_value]
 
         if value_bets:
             lines.append("<b>Apuestas recomendadas:</b>\n")
             total_stake = 0.0
+
             for a in value_bets:
                 b = a.best_bet
-                stake = a.kelly.stake_units if a.kelly else 0
-                total_stake += stake
+                pick_type = _PICK_TYPE.get(b.selection, b.selection)
+                conf_label = getattr(a, "confidence", "Media")
+
+                # Stake: aplicar cap de 3.0u y respetar máximo de exposición restante
+                raw_stake = a.kelly.stake_units if a.kelly else 1.0
+                stake = min(raw_stake, MAX_STAKE_PER_PICK)
+                remaining = MAX_EXPOSURE_HARD - total_stake
+                stake = min(stake, max(remaining, 0.0))
+                stake = round(stake, 1)
+
+                if stake <= 0:
+                    continue  # Exposición máxima alcanzada
+
+                total_stake = round(total_stake + stake, 1)
+
+                # Label de dirección para spread/moneyline
+                if b.selection in ("Home", "Spread Home"):
+                    direction = f"{a.home_team}"
+                elif b.selection in ("Away", "Spread Away"):
+                    direction = f"{a.away_team}"
+                else:
+                    direction = b.selection  # Over / Under
+
+                # Línea de spread o total
+                line_str = ""
+                if b.line is not None and b.selection in ("Spread Home", "Spread Away", "Over", "Under"):
+                    line_str = f" {b.line:+.1f}" if b.selection in ("Spread Home", "Spread Away") else f" {b.line}"
+
+                # Advertencia de alta discrepancia con mercado
+                ev_warn = ""
+                if b.ev_percent > EV_MARKET_WARNING_THRESHOLD:
+                    market_impl = round((1 / b.odds) * 100, 1)
+                    model_pct = round(b.probability * 100, 1)
+                    ev_warn = f"\n  ⚠️ Alta discrepancia con mercado (Modelo: {model_pct}% vs Mercado: {market_impl}%)"
+
                 lines.append(f"- <b>{a.home_team} vs {a.away_team}</b>")
-                lines.append(f"  {b.selection} @ {b.odds:.2f} (EV: {b.ev_percent:+.1f}%)")
-                lines.append(f"  Stake: {stake:.1f}u | Conf: {a.confidence}")
+                lines.append(f"  {pick_type}: {direction}{line_str} @ {b.odds:.2f} (EV: {b.ev_percent:+.1f}%){ev_warn}")
+                conf_icon = "🔥" if "Alta" in str(conf_label) or conf_label == "high" else ("✅" if "Media" in str(conf_label) else "🟡")
+                lines.append(f"  Stake: {stake:.1f}u | Conf: {conf_icon} {conf_label}")
                 lines.append("")
+
+            # Advertencia si se acerca al límite de exposición
+            if total_stake > MAX_EXPOSURE_WARN:
+                lines.append(f"⚠️ Exposición alta ({total_stake:.1f}u). Revisa tu bankroll.")
             lines.append(f"Exposición total: {total_stake:.1f}u")
         else:
-            lines.append("Sin apuestas con valor hoy.")
-
-        if no_bets:
-            lines.append(f"\nNo apostar ({len(no_bets)} partidos):")
-            for a in no_bets:
-                lines.append(f"   — {a.home_team} vs {a.away_team}")
+            lines.append("Sin apuestas con valor hoy (Ganador/Spread/Over-Under).")
 
         lines.append(f"\n{'=' * 30}")
-        lines.append(f"\n<i>🤖 WinStake.ia {VERSION} | Análisis informativo. Apuesta responsable.</i>")
+        lines.append(f"🤖 WinStake.ia {VERSION} | Análisis informativo. Apuesta responsable.")
         return "\n".join(lines)
 
 
