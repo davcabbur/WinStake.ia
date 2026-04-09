@@ -1,6 +1,6 @@
 """
-WinStake.ia v3.0 — Formateador NBA para Telegram
-Bot conservador: resumen ejecutivo solo ganadores/spread/totals, prob >52%, stake cap 2.5u, exposición ≤12u.
+WinStake.ia v3.1 — Formateador NBA para Telegram
+Bot conservador: resumen ejecutivo solo ganadores/spread/totals, prob >52%, stake cap 2.5u, exposición 6-12u (hard cap 15u).
 """
 
 import logging
@@ -11,7 +11,7 @@ _SPAIN_TZ = ZoneInfo("Europe/Madrid")
 
 logger = logging.getLogger(__name__)
 
-VERSION = "v3.0"
+VERSION = "v3.1"
 MODEL_TAG = "Normal Distribution + DvP | Kelly ½ | Blend modelo-mercado aplicado"
 
 # ── Límites de cuota combinada ────────────────────────────────
@@ -22,10 +22,10 @@ AGG_ODDS_MIN    = 4.50
 AGG_ODDS_MAX    = 7.50
 AGG_ODDS_HARD   = 8.00   # nunca superar
 
-# ── Límites v3.0 ──────────────────────────────────────────────
+# ── Límites v3.1 ──────────────────────────────────────────────
 MAX_STAKE_PER_PICK          = 2.5   # máximo stake por pick individual
-MAX_EXPOSURE_WARN           = 10.0  # aviso si exposición supera este umbral
-MAX_EXPOSURE_HARD           = 12.0  # nunca superar (corta picks automáticamente)
+MAX_EXPOSURE_WARN           = 12.0  # aviso si exposición supera 12u (rango recomendado: 6-12u)
+MAX_EXPOSURE_HARD           = 15.0  # hard cap — nunca superar
 EV_MARKET_WARNING_THRESHOLD = 25.0  # EV > 25% → advertencia + stake reducido
 EV_SUSPICIOUS_THRESHOLD     = 35.0  # EV > 35% → pick excluido del resumen
 MAX_PICKS_SUMMARY           = 6    # máximo de picks en el Resumen Ejecutivo
@@ -234,7 +234,7 @@ def _injury_impact_text(status: str, ppg: float) -> str:
 # ─────────────────────────────────────────────────────────────
 
 class NBAFormatter:
-    """Formatea análisis NBA para Telegram (WinStake.ia v3.0)."""
+    """Formatea análisis NBA para Telegram (WinStake.ia v3.1)."""
 
     PARSE_MODE = "HTML"
 
