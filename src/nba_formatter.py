@@ -5,6 +5,9 @@ Bot conservador: blend modelo-mercado, EV realista, props con MPG filter.
 
 import logging
 from datetime import datetime
+from zoneinfo import ZoneInfo
+
+_SPAIN_TZ = ZoneInfo("Europe/Madrid")
 
 logger = logging.getLogger(__name__)
 
@@ -228,7 +231,7 @@ class NBAFormatter:
     # ── Header ────────────────────────────────────────────────
 
     def _format_header(self, analyses: list) -> str:
-        now = datetime.now().strftime("%d/%m/%Y %H:%M")
+        now = datetime.now(_SPAIN_TZ).strftime("%d/%m/%Y %H:%M")
         n = len(analyses)
         v = sum(1 for a in analyses if a.best_bet and a.best_bet.is_value)
         return (
@@ -248,7 +251,8 @@ class NBAFormatter:
         if a.commence_time:
             try:
                 dt = datetime.fromisoformat(a.commence_time.replace("Z", "+00:00"))
-                lines.append(f"{dt.strftime('%d/%m/%Y %H:%M')} UTC")
+                dt_spain = dt.astimezone(_SPAIN_TZ)
+                lines.append(f"{dt_spain.strftime('%d/%m/%Y %H:%M')} (España)")
             except (ValueError, AttributeError):
                 pass
         lines.append("")
@@ -499,7 +503,7 @@ class NBAFormatter:
         if not sections:
             return None
 
-        header = f"🏥 <b>INJURY REPORT — {datetime.now().strftime('%d/%m/%Y')}</b>"
+        header = f"🏥 <b>INJURY REPORT — {datetime.now(_SPAIN_TZ).strftime('%d/%m/%Y')}</b>"
         legend = "\n\n<i>🔴 Out  🟠 Doubtful  🟡 Day-to-Day / Questionable</i>"
         return header + "".join(sections) + legend
 
@@ -513,7 +517,7 @@ class NBAFormatter:
         """
         lines = []
         lines.append("🎰 <b>COMBINADA RECOMENDADA — NBA</b>")
-        lines.append(f"📅 {datetime.now().strftime('%d/%m/%Y %H:%M')}\n")
+        lines.append(f"📅 {datetime.now(_SPAIN_TZ).strftime('%d/%m/%Y %H:%M')} (España)\n")
 
         # ── Sección de lesiones con impacto contextual ────────
         # Recoger lesiones de ESPN (todas, no solo estrellas), ordenadas por PPG

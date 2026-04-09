@@ -245,11 +245,44 @@ class OddsClient:
                             elif "Draw" not in name:
                                 match["odds_double_chance"]["12"].append(o["price"])
 
+            # ── Extraer cuotas específicas de Bet365 ──────────────
+            bet365_h2h = {"home": None, "away": None, "draw": None}
+            bet365_spread = {"home": None, "away": None, "line": None}
+            for bm in bookmakers:
+                if bm.get("key") == "bet365":
+                    for market in bm.get("markets", []):
+                        if market["key"] == "h2h":
+                            for o in market.get("outcomes", []):
+                                if o["name"] == event["home_team"]:
+                                    bet365_h2h["home"] = o["price"]
+                                elif o["name"] == event["away_team"]:
+                                    bet365_h2h["away"] = o["price"]
+                                elif o["name"] == "Draw":
+                                    bet365_h2h["draw"] = o["price"]
+                        elif market["key"] == "spreads":
+                            for o in market.get("outcomes", []):
+                                if o["name"] == event["home_team"]:
+                                    bet365_spread["home"] = o["price"]
+                                    bet365_spread["line"] = o.get("point", 0)
+                                elif o["name"] == event["away_team"]:
+                                    bet365_spread["away"] = o["price"]
+                    break  # Solo un bet365
+
+            match["bet365_odds"] = {
+                "h2h_home": bet365_h2h["home"],
+                "h2h_away": bet365_h2h["away"],
+                "spread_home": bet365_spread["home"],
+                "spread_away": bet365_spread["away"],
+                "spread_line": bet365_spread["line"],
+                "available": bet365_h2h["home"] is not None or bet365_spread["home"] is not None,
+            }
+
             # Calcular cuotas promedio (filtrando outliers)
             match["avg_odds"] = {
-                "home": self._trimmed_mean(match["odds_h2h"]["home"]),
-                "draw": self._trimmed_mean(match["odds_h2h"]["draw"]),
-                "away": self._trimmed_mean(match["odds_h2h"]["away"]),
+                # Moneyline: Bet365 si disponible, si no media recortada
+                "home": bet365_h2h["home"] if bet365_h2h["home"] is not None else self._trimmed_mean(match["odds_h2h"]["home"]),
+                "draw": bet365_h2h["draw"] if bet365_h2h["draw"] is not None else self._trimmed_mean(match["odds_h2h"]["draw"]),
+                "away": bet365_h2h["away"] if bet365_h2h["away"] is not None else self._trimmed_mean(match["odds_h2h"]["away"]),
                 "double_chance_1x": self._trimmed_mean(match["odds_double_chance"]["1x"]),
                 "double_chance_x2": self._trimmed_mean(match["odds_double_chance"]["x2"]),
                 "double_chance_12": self._trimmed_mean(match["odds_double_chance"]["12"]),
@@ -261,13 +294,15 @@ class OddsClient:
                 "under_35": self._trimmed_mean(match["odds_totals"]["under_35"]),
                 "btts_yes": self._trimmed_mean(match["odds_btts"]["yes"]),
                 "btts_no": self._trimmed_mean(match["odds_btts"]["no"]),
-                # Spreads (NBA y otros deportes con handicap)
-                "spread_home": self._trimmed_mean(match["odds_spreads"]["home"]),
-                "spread_away": self._trimmed_mean(match["odds_spreads"]["away"]),
+                # Spreads: Bet365 si disponible, si no media recortada
+                "spread_home": bet365_spread["home"] if bet365_spread["home"] is not None else self._trimmed_mean(match["odds_spreads"]["home"]),
+                "spread_away": bet365_spread["away"] if bet365_spread["away"] is not None else self._trimmed_mean(match["odds_spreads"]["away"]),
             }
 
-            # Calcular spread y total de referencia desde las odds
-            if match["odds_spreads"]["home_points"]:
+            # Calcular spread_line: Bet365 preferido, si no media del mercado
+            if bet365_spread["line"] is not None:
+                match["avg_odds"]["spread_line"] = float(bet365_spread["line"])
+            elif match["odds_spreads"]["home_points"]:
                 match["avg_odds"]["spread_line"] = round(
                     sum(match["odds_spreads"]["home_points"])
                     / len(match["odds_spreads"]["home_points"]), 1

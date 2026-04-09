@@ -6,11 +6,14 @@ No requiere API key.
 
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 from src.cache import APICache
 import config
+
+SPAIN_TZ = ZoneInfo("Europe/Madrid")
 
 logger = logging.getLogger(__name__)
 
@@ -515,9 +518,70 @@ class NBAClient:
             logger.warning(f"Error obteniendo últimos 10 partidos team_id={team_id}: {e}")
             return []
 
+    def get_espn_schedule(self, days_ahead: int = 2) -> list[dict]:
+        """
+        Obtiene calendario NBA desde ESPN Deportes.
+        Fuente: https://espndeportes.espn.com/basquetbol/nba/calendario
+        Devuelve partidos con horarios en zona horaria de España (Europe/Madrid).
+        """
+        cache_key = "nba_espn_schedule"
+        cached = self.cache.get(cache_key, 1800)
+        if cached is not None:
+            return cached
+
+        try:
+            import httpx
+            base_url = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
+            games = []
+            now_utc = datetime.now(timezone.utc)
+
+            for day_offset in range(days_ahead + 1):
+                target = now_utc + timedelta(days=day_offset)
+                date_str = target.strftime("%Y%m%d")
+                resp = httpx.get(base_url, params={"dates": date_str, "lang": "es", "region": "es"}, timeout=10)
+                resp.raise_for_status()
+                data = resp.json()
+
+                for event in data.get("events", []):
+                    competition = event.get("competitions", [{}])[0]
+                    competitors = competition.get("competitors", [])
+                    home = next((c for c in competitors if c.get("homeAway") == "home"), None)
+                    away = next((c for c in competitors if c.get("homeAway") == "away"), None)
+                    if not home or not away:
+                        continue
+
+                    start_utc_str = event.get("date", "")
+                    commence_spain = ""
+                    if start_utc_str:
+                        try:
+                            start_utc = datetime.fromisoformat(start_utc_str.replace("Z", "+00:00"))
+                            start_spain = start_utc.astimezone(SPAIN_TZ)
+                            commence_spain = start_spain.strftime("%d/%m/%Y %H:%M")
+                        except (ValueError, TypeError):
+                            pass
+
+                    games.append({
+                        "espn_id": event.get("id"),
+                        "home_team": home.get("team", {}).get("displayName", ""),
+                        "away_team": away.get("team", {}).get("displayName", ""),
+                        "home_abbr": home.get("team", {}).get("abbreviation", ""),
+                        "away_abbr": away.get("team", {}).get("abbreviation", ""),
+                        "commence_time_utc": start_utc_str,
+                        "commence_time_spain": commence_spain,
+                        "status": event.get("status", {}).get("type", {}).get("description", ""),
+                    })
+
+            self.cache.set(cache_key, games)
+            logger.info(f"Calendario ESPN Deportes: {len(games)} partidos NBA")
+            return games
+        except Exception as e:
+            logger.warning(f"Error obteniendo calendario ESPN: {e}")
+            return []
+
     def get_injuries(self) -> dict:
         """
-        Obtiene lesiones NBA desde la API pública de ESPN.
+        Obtiene lesiones NBA desde ESPN Deportes.
+        Fuente: https://espndeportes.espn.com/basquetbol/nba/lesiones
         Retorna {team_abbrev: [{"player", "status", "detail"}]}
         """
         cache_key = "nba_injuries_espn"
@@ -527,8 +591,9 @@ class NBAClient:
 
         try:
             import httpx
+            # API pública de ESPN (fuente del calendario espndeportes.espn.com)
             url = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/injuries"
-            resp = httpx.get(url, timeout=10)
+            resp = httpx.get(url, params={"lang": "es", "region": "es"}, timeout=10)
             resp.raise_for_status()
             data = resp.json()
 
