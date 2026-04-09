@@ -1,10 +1,11 @@
 import { Component, Input, OnChanges } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { LocaleCurrencyPipe } from '../../../../shared/pipes/locale-currency.pipe';
 
 @Component({
   selector: 'app-stats-cards',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, LocaleCurrencyPipe],
   template: `
     <div class="stats-grid">
       <div class="glass-card stat-card">
@@ -13,7 +14,7 @@ import { CommonModule } from '@angular/common';
           <h3>Beneficio Total</h3>
         </div>
         <div class="stat-value" [class.positive]="profit > 0" [class.negative]="profit < 0">
-          {{ profit > 0 ? '+' : '' }}{{ profit | number:'1.2-2' }} U
+          {{ profit | localeCurrency:2:2:true }}
         </div>
       </div>
       

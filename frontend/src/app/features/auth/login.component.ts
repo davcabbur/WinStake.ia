@@ -29,6 +29,6 @@ export class LoginComponent {
   fakeLogin() {
     // Aquí iría la llamada HTTP al backend FastAPI (/api/v1/auth/login)
     this.auth.login('dummy_jwt_token_for_phase_2');
-    this.router.navigate(['/dashboard']);
+    this.router.navigate(['/']);
   }
 }

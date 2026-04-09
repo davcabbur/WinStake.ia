@@ -1,6 +1,6 @@
 import { Component, OnInit, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { Subscription } from 'rxjs';
+import { Subscription, forkJoin } from 'rxjs';
 
 import { StatsCardsComponent } from './components/stats-cards/stats-cards.component';
 import { HistoryTableComponent } from './components/history-table/history-table.component';
@@ -13,27 +13,35 @@ import { WebsocketService, OddsUpdate } from '../../core/services/websocket.serv
 @Component({
   selector: 'app-dashboard',
   standalone: true,
-  imports: [
-    CommonModule,
-    StatsCardsComponent,
-    HistoryTableComponent,
-    LiveOddsComponent,
-    ProfitChartComponent
-  ],
+  imports: [CommonModule, StatsCardsComponent, HistoryTableComponent, LiveOddsComponent, ProfitChartComponent],
   template: `
-    <!-- Stats Top Row -->
-    <app-stats-cards [stats]="stats"></app-stats-cards>
+    <!-- Error banner -->
+    <div class="error-banner" *ngIf="loadError">
+      ⚠ No se pudieron cargar los datos del dashboard. Verifica que la API esté activa.
+    </div>
 
-    <!-- Profit Chart -->
-    <app-profit-chart [chartData]="chartData"></app-profit-chart>
+    <!-- Stats skeleton -->
+    <div class="stats-skeleton" *ngIf="loading">
+      <div class="skeleton skeleton-card" *ngFor="let _ of [1,2,3]"></div>
+    </div>
+    <app-stats-cards [stats]="stats" *ngIf="!loading"></app-stats-cards>
+
+    <!-- Chart skeleton -->
+    <div class="glass-card skeleton-chart-wrap" *ngIf="loading">
+      <div class="skeleton skeleton-title"></div>
+      <div class="skeleton" style="height:200px; border-radius:8px;"></div>
+    </div>
+    <app-profit-chart [chartData]="chartData" *ngIf="!loading"></app-profit-chart>
 
     <div class="main-grid">
-      <!-- Left Column: History Table -->
       <div class="history-column">
-        <app-history-table [history]="history"></app-history-table>
+        <!-- History skeleton -->
+        <div class="glass-card" *ngIf="loading">
+          <div class="skeleton skeleton-title"></div>
+          <div class="skeleton skeleton-row" *ngFor="let _ of [1,2,3,4,5]"></div>
+        </div>
+        <app-history-table [history]="history" *ngIf="!loading"></app-history-table>
       </div>
-
-      <!-- Right Column: Live Odds WS -->
       <div class="live-column">
         <app-live-odds [data]="liveOddsData"></app-live-odds>
       </div>
@@ -45,11 +53,18 @@ import { WebsocketService, OddsUpdate } from '../../core/services/websocket.serv
       grid-template-columns: 2fr 1fr;
       gap: 32px;
     }
-
+    .stats-skeleton {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 24px;
+      margin-bottom: 32px;
+    }
+    .skeleton-chart-wrap {
+      margin-bottom: 32px;
+      padding: 24px;
+    }
     @media (max-width: 1100px) {
-      .main-grid {
-        grid-template-columns: 1fr;
-      }
+      .main-grid { grid-template-columns: 1fr; }
     }
   `]
 })
@@ -59,12 +74,12 @@ export class DashboardComponent implements OnInit, OnDestroy {
   chartData: ChartData | null = null;
   liveOddsData: OddsUpdate | null = null;
 
+  loading = true;
+  loadError = false;
+
   private wsSubscription: Subscription | null = null;
 
-  constructor(
-    private apiService: ApiService,
-    private wsService: WebsocketService
-  ) {}
+  constructor(private apiService: ApiService, private wsService: WebsocketService) {}
 
   ngOnInit() {
     this.loadData();
@@ -72,19 +87,24 @@ export class DashboardComponent implements OnInit, OnDestroy {
   }
 
   private loadData() {
-    this.apiService.getStats().subscribe({
-      next: (data) => this.stats = data,
-      error: (err) => console.error('Error loading stats', err)
-    });
+    this.loading = true;
+    this.loadError = false;
 
-    this.apiService.getHistory(10).subscribe({
-      next: (res) => this.history = res.data,
-      error: (err) => console.error('Error loading history', err)
-    });
-
-    this.apiService.getChartData().subscribe({
-      next: (data) => this.chartData = data,
-      error: (err) => console.error('Error loading chart data', err)
+    forkJoin({
+      stats: this.apiService.getStats(),
+      history: this.apiService.getHistory(10),
+      chart: this.apiService.getChartData(),
+    }).subscribe({
+      next: ({ stats, history, chart }) => {
+        this.stats = stats;
+        this.history = history.data;
+        this.chartData = chart;
+        this.loading = false;
+      },
+      error: () => {
+        this.loading = false;
+        this.loadError = true;
+      }
     });
   }
 
@@ -96,9 +116,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy() {
-    if (this.wsSubscription) {
-      this.wsSubscription.unsubscribe();
-    }
+    this.wsSubscription?.unsubscribe();
     this.wsService.disconnect();
   }
 }

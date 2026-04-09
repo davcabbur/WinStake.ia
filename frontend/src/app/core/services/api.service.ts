@@ -79,6 +79,15 @@ export interface SelectionStats {
   avg_ev: number;
 }
 
+export interface EngineConfig {
+  ev_min: number;
+  kelly_fraction: number;
+  kelly_cap: number;
+  home_advantage: number;
+  xg_weight: number;
+  bankroll_base: number;
+}
+
 import { environment } from '../../../environments/environment';
 
 @Injectable({
@@ -120,5 +129,15 @@ export class ApiService {
 
   runAnalysis(): Observable<AnalysisResponse> {
     return this.http.get<AnalysisResponse>(`${this.baseUrl}/api/v1/analysis/`);
+  }
+
+  // ── Engine settings ──
+
+  getEngineConfig(): Observable<EngineConfig> {
+    return this.http.get<EngineConfig>(`${this.baseUrl}/api/dashboard/engine-config`);
+  }
+
+  updateEngineConfig(config: EngineConfig): Observable<EngineConfig> {
+    return this.http.put<EngineConfig>(`${this.baseUrl}/api/dashboard/engine-config`, config);
   }
 }

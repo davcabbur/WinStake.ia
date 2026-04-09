@@ -1,10 +1,11 @@
 import { Component, Input } from '@angular/core';
 import { CommonModule, DatePipe } from '@angular/common';
+import { LocaleCurrencyPipe } from '../../../../shared/pipes/locale-currency.pipe';
 
 @Component({
   selector: 'app-history-table',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, LocaleCurrencyPipe],
   providers: [DatePipe],
   template: `
     <div class="glass-card table-container">
@@ -41,12 +42,12 @@ import { CommonModule, DatePipe } from '@angular/common';
                   {{ bet.confidence }}
                 </span>
               </td>
-              <td>{{ bet.stake_units | number:'1.1-1' }} U</td>
+              <td>{{ bet.stake_units | localeCurrency:1:1 }}</td>
               <td>
                 <span class="badge" *ngIf="bet.bet_won !== null"
                   [class.badge-success]="bet.bet_won === 1"
                   [class.badge-error]="bet.bet_won === 0">
-                  {{ bet.bet_won === 1 ? '+' + (bet.profit_units | number:'1.2-2') : 'Perdida' }}
+                  {{ bet.bet_won === 1 ? (bet.profit_units | localeCurrency:2:2:true) : 'Perdida' }}
                 </span>
                 <span class="badge badge-secondary" *ngIf="bet.bet_won === null">
                   Pendiente

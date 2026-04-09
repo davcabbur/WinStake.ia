@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="2" skipped="0" tests="15" time="1.699" timestamp="2026-04-07T17:24:48.737220+02:00" hostname="DESKTOP-TUVN4IV"><testcase classname="tests.test_api_auth" name="test_dashboard_access_unavailable_when_no_key_configured" time="0.005" /><testcase classname="tests.test_api_auth" name="test_dashboard_access_with_invalid_key" time="0.003" /><testcase classname="tests.test_api_auth" name="test_dashboard_access_with_missing_key" time="0.002" /><testcase classname="tests.test_api_auth" name="test_dashboard_access_with_valid_key" time="0.003" /><testcase classname="tests.test_api_endpoints" name="test_get_stats_empty" time="0.016" /><testcase classname="tests.test_api_endpoints" name="test_get_stats_with_data" time="0.015"><failure message="AttributeError: '_GeneratorContextManager' object has no attribute 'execute'">mock_db = &lt;src.database.Database object at 0x000001CB0289B6E0&gt;
+
+    def test_get_stats_with_data(mock_db):
+        mock_db.save_analysis(_make_analysis())
+        # Falsificamos un resultado ganador usando una query directa para recuperar ids
+        conn = mock_db._get_conn()
+&gt;       vb_id = conn.execute("SELECT id FROM value_bets").fetchone()[0]
+                ^^^^^^^^^^^^
+E       AttributeError: '_GeneratorContextManager' object has no attribute 'execute'
+
+tests\test_api_endpoints.py:52: AttributeError</failure></testcase><testcase classname="tests.test_api_endpoints" name="test_get_history" time="0.022" /><testcase classname="tests.test_api_endpoints" name="test_get_chart_data" time="0.015"><failure message="AttributeError: '_GeneratorContextManager' object has no attribute 'execute'">mock_db = &lt;src.database.Database object at 0x000001CB0289AE40&gt;
+
+    def test_get_chart_data(mock_db):
+        mock_db.save_analysis(_make_analysis())
+        conn = mock_db._get_conn()
+&gt;       vb_id = conn.execute("SELECT id FROM value_bets").fetchone()[0]
+                ^^^^^^^^^^^^
+E       AttributeError: '_GeneratorContextManager' object has no attribute 'execute'
+
+tests\test_api_endpoints.py:80: AttributeError</failure></testcase><testcase classname="tests.test_api_endpoints" name="test_run_analysis_engine" time="0.005" /><testcase classname="tests.test_bot_daemon" name="test_start_command" time="0.002" /><testcase classname="tests.test_bot_daemon" name="test_ping_command" time="0.003" /><testcase classname="tests.test_bot_daemon" name="test_roi_command_empty" time="0.002" /><testcase classname="tests.test_bot_daemon" name="test_roi_command_with_data" time="0.002" /><testcase classname="tests.test_bot_daemon" name="test_analizar_sport_no_matches" time="0.004" /><testcase classname="tests.test_bot_daemon" name="test_analizar_sport_with_matches" time="0.006" /></testsuite></testsuites>

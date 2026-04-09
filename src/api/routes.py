@@ -1,7 +1,17 @@
 from fastapi import APIRouter, Depends, HTTPException
 import sqlite3
+from pydantic import BaseModel
 from src.database import DB_PATH, Database
 from src.api.auth import require_api_key
+
+
+class EngineConfigIn(BaseModel):
+    ev_min: float
+    kelly_fraction: float
+    kelly_cap: float
+    home_advantage: float
+    xg_weight: float
+    bankroll_base: float
 
 router = APIRouter(dependencies=[Depends(require_api_key)])
 
@@ -91,3 +101,18 @@ def get_chart_data():
         return {"dates": dates, "cumulative_profit": profits}
     finally:
         conn.close()
+
+
+@router.get("/dashboard/engine-config")
+def get_engine_config():
+    """Devuelve la configuración actual del motor."""
+    db = Database()
+    return db.get_settings()
+
+
+@router.put("/dashboard/engine-config")
+def update_engine_config(config: EngineConfigIn):
+    """Actualiza la configuración del motor."""
+    db = Database()
+    updated = db.update_settings(config.model_dump())
+    return updated

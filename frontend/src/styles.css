@@ -95,5 +95,45 @@ h2 { font-size: 18px; }
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--text-secondary); 
+  background: var(--text-secondary);
+}
+
+/* ── Route fade-in animation ── */
+.app-content > * {
+  animation: routeFadeIn 160ms ease-out;
+}
+@keyframes routeFadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Skeleton loader ── */
+.skeleton {
+  background: linear-gradient(90deg, var(--bg-surface-hover) 25%, rgba(255,255,255,0.06) 50%, var(--bg-surface-hover) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s infinite;
+  border-radius: 8px;
+}
+@keyframes shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+.skeleton-line  { height: 16px; margin-bottom: 10px; border-radius: 4px; }
+.skeleton-title { height: 28px; width: 40%; margin-bottom: 16px; border-radius: 6px; }
+.skeleton-value { height: 40px; width: 60%; border-radius: 6px; }
+.skeleton-card  { height: 120px; border-radius: 16px; }
+.skeleton-row   { height: 44px; border-radius: 6px; margin-bottom: 6px; }
+
+/* ── Error state ── */
+.error-banner {
+  background: var(--status-error-bg);
+  border: 1px solid rgba(239,68,68,0.25);
+  color: var(--status-error-text);
+  border-radius: 12px;
+  padding: 16px 20px;
+  font-size: 14px;
+  margin-bottom: 24px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }

@@ -99,10 +99,31 @@ class Database:
                     ON value_bets(analysis_id);
                 CREATE INDEX IF NOT EXISTS idx_match_results_bet
                     ON match_results(value_bet_id);
+
+                -- Improvement 8: line movement tracking
+                CREATE TABLE IF NOT EXISTS line_snapshots (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    match_id        TEXT,
+                    sport           TEXT,
+                    snapshot_time   TEXT,
+                    spread_line     REAL,
+                    total_line      REAL,
+                    home_odds       REAL,
+                    away_odds       REAL
+                );
+                CREATE INDEX IF NOT EXISTS idx_line_snapshots_match
+                    ON line_snapshots(match_id, snapshot_time);
+
+                CREATE TABLE IF NOT EXISTS engine_settings (
+                    key   TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
             """)
 
             # Migración: añadir columna sport si no existe (para BD antiguas y nuevas)
             self._migrate_add_sport_column(conn)
+            # Poblar settings por defecto si la tabla está vacía
+            self._seed_default_settings(conn)
             conn.commit()
             logger.info(f"✅ Base de datos inicializada en {self.db_path}")
 
@@ -128,6 +149,49 @@ class Database:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_value_bets_sport ON value_bets(sport)")
         if migrated:
             conn.commit()
+
+    # ── Engine settings ───────────────────────────────────────
+
+    _DEFAULT_SETTINGS = {
+        "ev_min":          "3.0",
+        "kelly_fraction":  "0.5",
+        "kelly_cap":       "0.25",
+        "home_advantage":  "1.25",
+        "xg_weight":       "0.65",
+        "bankroll_base":   "100.0",
+    }
+
+    @staticmethod
+    def _seed_default_settings(conn: sqlite3.Connection):
+        """Inserta valores por defecto solo si la tabla está vacía."""
+        count = conn.execute("SELECT COUNT(*) FROM engine_settings").fetchone()[0]
+        if count == 0:
+            conn.executemany(
+                "INSERT INTO engine_settings (key, value) VALUES (?, ?)",
+                list(Database._DEFAULT_SETTINGS.items()),
+            )
+
+    def get_settings(self) -> dict:
+        """Devuelve el diccionario de settings del motor."""
+        with self._get_conn() as conn:
+            rows = conn.execute("SELECT key, value FROM engine_settings").fetchall()
+            settings = dict(Database._DEFAULT_SETTINGS)  # fallback a defaults
+            for row in rows:
+                settings[row["key"]] = row["value"]
+            return {k: float(v) for k, v in settings.items()}
+
+    def update_settings(self, new_values: dict) -> dict:
+        """Actualiza settings del motor y devuelve el estado completo."""
+        with self._get_conn() as conn:
+            for key, value in new_values.items():
+                if key in Database._DEFAULT_SETTINGS:
+                    conn.execute(
+                        "INSERT INTO engine_settings (key, value) VALUES (?, ?) "
+                        "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                        (key, str(value)),
+                    )
+            conn.commit()
+        return self.get_settings()
 
     # ── Guardar datos ─────────────────────────────────────────
 
@@ -425,6 +489,79 @@ class Database:
             """, (limit,)).fetchall()
 
             return [dict(row) for row in rows]
+
+    # ── Improvement 8: Line movement tracking ────────────────
+
+    def save_line_snapshot(
+        self,
+        match_id: str,
+        sport: str,
+        spread_line: Optional[float],
+        total_line: Optional[float],
+        home_odds: Optional[float],
+        away_odds: Optional[float],
+    ) -> None:
+        """Saves a line snapshot for a given match."""
+        with self._get_conn() as conn:
+            conn.execute("""
+                INSERT INTO line_snapshots (
+                    match_id, sport, snapshot_time, spread_line, total_line, home_odds, away_odds
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                match_id,
+                sport,
+                datetime.now().isoformat(),
+                spread_line,
+                total_line,
+                home_odds,
+                away_odds,
+            ))
+            conn.commit()
+
+    def detect_line_movement(
+        self,
+        match_id: str,
+        current_spread: Optional[float],
+        current_total: Optional[float],
+        current_home_odds: Optional[float],
+        current_away_odds: Optional[float],
+    ) -> Optional[str]:
+        """
+        Compares current odds vs last snapshot.
+        Returns an alert string if significant movement detected, else None.
+        Thresholds: |spread_change| >= 2.0 or |total_change| >= 3.0.
+        """
+        with self._get_conn() as conn:
+            last = conn.execute("""
+                SELECT spread_line, total_line, home_odds, away_odds, snapshot_time
+                FROM line_snapshots
+                WHERE match_id = ?
+                ORDER BY snapshot_time DESC
+                LIMIT 1
+            """, (match_id,)).fetchone()
+
+        if not last:
+            return None
+
+        alerts = []
+        if current_spread is not None and last["spread_line"] is not None:
+            delta = abs(current_spread - last["spread_line"])
+            if delta >= 2.0:
+                alerts.append(
+                    f"📈 Spread moved {last['spread_line']:+.1f} → {current_spread:+.1f} "
+                    f"(Δ{delta:.1f})"
+                )
+        if current_total is not None and last["total_line"] is not None:
+            delta = abs(current_total - last["total_line"])
+            if delta >= 3.0:
+                alerts.append(
+                    f"📊 Total moved {last['total_line']:.1f} → {current_total:.1f} "
+                    f"(Δ{delta:.1f})"
+                )
+
+        if alerts:
+            return "⚠️ Movimiento de línea detectado: " + " | ".join(alerts)
+        return None
 
     def get_stats_by_selection(self) -> list[dict]:
         """ROI desglosado por tipo de selección (Local, Empate, Visitante, etc.)."""

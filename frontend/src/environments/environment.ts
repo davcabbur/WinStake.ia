@@ -1,14 +1,16 @@
 /**
- * WinStake.ia — Environment Configuration (Development)
+ * WinStake.ia — Environment Configuration (template/production)
  *
- * IMPORTANT: This file is committed to git as it only contains
- * the structure. The actual API key should be set via environment
- * or replaced during build.
+ * Do NOT put real secrets here. This file is committed to git.
+ * For local dev, create src/environments/environment.development.ts
+ * (gitignored) with the real values — angular.json will swap it in
+ * automatically when running `ng serve` or `ng build --configuration development`.
+ *
+ * For production deployments, inject WINSTAKE_API_KEY and
+ * WINSTAKE_API_BASE_URL at build time via CI/CD.
  */
 export const environment = {
-  production: false,
+  production: true,
   apiBaseUrl: 'http://localhost:8000',
-  // Set your DASHBOARD_API_KEY here for local development.
-  // In production, this should be injected at build time.
-  apiKey: '477af6fafada45aa5dfacde49d8ee012ee90477c402b838414a5f1bb2fec8567',
+  apiKey: '',
 };

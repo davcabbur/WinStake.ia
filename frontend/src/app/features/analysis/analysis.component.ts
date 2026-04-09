@@ -1,11 +1,12 @@
 import { Component, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { ApiService, ValueBet, AnalysisResult } from '../../core/services/api.service';
+import { LocaleCurrencyPipe } from '../../shared/pipes/locale-currency.pipe';
 
 @Component({
   selector: 'app-analysis',
   standalone: true,
-  imports: [CommonModule],
+  imports: [CommonModule, LocaleCurrencyPipe],
   template: `
     <div class="analysis-page">
       <!-- Run Analysis Section -->
@@ -23,6 +24,7 @@ import { ApiService, ValueBet, AnalysisResult } from '../../core/services/api.se
           <span class="badge badge-accent">{{ totalAnalyzed }} partidos analizados</span>
           <span class="badge badge-success" *ngIf="valueBets.length > 0">{{ valueBets.length }} value bets detectadas</span>
           <span class="badge badge-secondary" *ngIf="valueBets.length === 0">Sin value bets</span>
+          <button class="btn-export" *ngIf="valueBets.length > 0" (click)="exportCsv()">↓ CSV</button>
         </div>
         <div class="error-msg" *ngIf="errorMsg">{{ errorMsg }}</div>
       </div>
@@ -66,7 +68,7 @@ import { ApiService, ValueBet, AnalysisResult } from '../../core/services/api.se
               </div>
               <div class="metric">
                 <span class="metric-label">Stake</span>
-                <span class="metric-value">{{ bet.stake_units | number:'1.1-1' }} U</span>
+                <span class="metric-value">{{ bet.stake_units | localeCurrency:1:1 }}</span>
               </div>
             </div>
 
@@ -326,6 +328,19 @@ import { ApiService, ValueBet, AnalysisResult } from '../../core/services/api.se
       color: var(--text-secondary);
     }
 
+    .btn-export {
+      background: rgba(59,130,246,0.1);
+      border: 1px solid rgba(59,130,246,0.2);
+      color: var(--accent-primary);
+      border-radius: 8px;
+      padding: 5px 14px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .btn-export:hover { background: rgba(59,130,246,0.2); }
+
     .empty-state {
       text-align: center;
       padding: 48px;
@@ -357,6 +372,29 @@ export class AnalysisComponent implements OnInit {
       next: (res) => this.recentResults = res.results,
       error: () => {}
     });
+  }
+
+  exportCsv() {
+    const headers = ['Partido', 'Fecha', 'Seleccion', 'Cuota', 'EV%', 'Prob.Modelo', 'Kelly%', 'Stake', 'Confianza'];
+    const rows = this.valueBets.map(b => [
+      `"${b.match}"`,
+      b.commence_time,
+      b.selection,
+      b.odds,
+      b.ev_percent,
+      (b.probability * 100).toFixed(1),
+      b.kelly_half,
+      b.stake_units,
+      b.confidence,
+    ]);
+    const csv = [headers, ...rows].map(r => r.join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `value_bets_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   runAnalysis() {
