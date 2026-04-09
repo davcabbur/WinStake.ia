@@ -767,6 +767,11 @@ class NBAFormatter:
             if es_oficial:
                 raw_stake = a.kelly.stake_units if a.kelly else 1.0
                 stake = min(raw_stake, MAX_STAKE_PER_PICK)
+
+                # Picks marginales (1-3% EV): stake máx 1.0u
+                if b.is_marginal and not b.is_value:
+                    stake = min(stake, 1.0)
+
                 remaining = MAX_EXPOSURE_HARD - total_stake
                 stake = max(min(stake, remaining), 0.5)
                 stake = round(stake, 1)
@@ -774,10 +779,14 @@ class NBAFormatter:
                 total_stake = round(total_stake + stake, 1)
                 oficiales += 1
 
-                raw_conf = getattr(a, "confidence", "Media")
-                conf_label = str(raw_conf).capitalize()
-                if b.selection in ("Home", "Away") and b.odds > 2.40:
-                    conf_label = "Media"
+                # Confianza: Moderada para picks marginales, Alta/Media para value
+                if b.is_marginal and not b.is_value:
+                    conf_label = "Moderada"
+                else:
+                    raw_conf = getattr(a, "confidence", "Media")
+                    conf_label = str(raw_conf).capitalize()
+                    if b.selection in ("Home", "Away") and b.odds > 2.40:
+                        conf_label = "Media"
 
                 lines.append(
                     f"  {pick_desc} @ {b.odds:.2f} "
