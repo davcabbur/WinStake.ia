@@ -21,7 +21,8 @@ class EVResult:
     odds: float = 0.0
     ev: float = 0.0
     ev_percent: float = 0.0
-    is_value: bool = False
+    is_value: bool = False       # EV >= MIN_EV_THRESHOLD (3%) — pick de valor pleno
+    is_marginal: bool = False    # EV >= MARGINAL_EV_THRESHOLD (1%) y < 3% — valor marginal
     line: Optional[float] = None
 
 
@@ -67,6 +68,7 @@ class EVCalculator:
 
     def __init__(self):
         self.min_ev = config.MIN_EV_THRESHOLD
+        self.marginal_ev = config.MARGINAL_EV_THRESHOLD
         self.kelly_cap = config.KELLY_CAP
         self.bankroll = config.BANKROLL_UNITS
 
@@ -114,16 +116,23 @@ class EVCalculator:
                     ev=round(ev, 4),
                     ev_percent=ev_percent,
                     is_value=bool(ev >= self.min_ev),
+                    is_marginal=bool(self.marginal_ev <= ev < self.min_ev),
                 ))
 
         return results
 
     def find_best_bet(self, ev_results: list[EVResult]) -> Optional[EVResult]:
-        """Encuentra el resultado con mayor EV positivo."""
+        """
+        Encuentra el resultado con mayor EV positivo.
+        Prioriza is_value (EV ≥ 3%); si no hay ninguno, sube el mejor is_marginal (1-3%).
+        """
         value_bets = [r for r in ev_results if r.is_value]
-        if not value_bets:
-            return None
-        return max(value_bets, key=lambda x: x.ev)
+        if value_bets:
+            return max(value_bets, key=lambda x: x.ev)
+        marginal_bets = [r for r in ev_results if r.is_marginal]
+        if marginal_bets:
+            return max(marginal_bets, key=lambda x: x.ev)
+        return None
 
     def kelly_criterion(self, probability: float, odds: float) -> KellyResult:
         """Calcula el criterio de Kelly para sizing de apuesta."""
@@ -224,6 +233,7 @@ class EVCalculator:
                 ev=round(ev, 4),
                 ev_percent=ev_percent,
                 is_value=is_value,
+                is_marginal=bool(self.marginal_ev <= ev < self.min_ev and not is_value),
                 line=line,
             ))
 

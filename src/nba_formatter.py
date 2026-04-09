@@ -755,7 +755,7 @@ class NBAFormatter:
 
             # ── Clasificar: PICK OFICIAL o TENDENCIA ─────────────
             es_oficial = (
-                b.is_value
+                (b.is_value or b.is_marginal)   # EV ≥ 1% (marginal) o ≥ 3% (value)
                 and b.probability >= MIN_PROB_THRESHOLD
                 and 1.0 <= b.ev_percent <= EV_SUSPICIOUS_THRESHOLD
                 and not ml_bloqueado

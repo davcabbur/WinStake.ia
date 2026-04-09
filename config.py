@@ -38,7 +38,8 @@ MAX_GOALS_MODEL = 6           # Máximo de goles a modelar por equipo
 # ── Bankroll ──────────────────────────────────────────────
 BANKROLL_UNITS = 100          # Base de bankroll en unidades
 KELLY_CAP = 0.10              # Máximo 10% de bankroll por apuesta
-MIN_EV_THRESHOLD = 0.03       # EV mínimo para recomendar (3%)
+MIN_EV_THRESHOLD = 0.03       # EV mínimo para is_value (Pick Oficial pleno)
+MARGINAL_EV_THRESHOLD = 0.01  # EV mínimo para is_marginal (Pick Oficial con stake reducido)
 MIN_EDGE_PERCENT = 0.05       # Edge mínimo vs mercado (5%)
 
 # ── Telegram ──────────────────────────────────────────────
