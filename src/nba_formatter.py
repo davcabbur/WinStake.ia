@@ -23,10 +23,13 @@ AGG_ODDS_MAX    = 7.50
 AGG_ODDS_HARD   = 8.00   # nunca superar
 
 # ── Límites v2.9 ──────────────────────────────────────────────
-MAX_STAKE_PER_PICK  = 3.0   # máximo stake por pick individual
-MAX_EXPOSURE_WARN   = 12.0  # aviso si exposición supera este umbral
-MAX_EXPOSURE_HARD   = 15.0  # nunca superar (caps automáticamente)
-EV_MARKET_WARNING_THRESHOLD = 40.0  # EV > 40% → advertencia de discrepancia
+MAX_STAKE_PER_PICK      = 2.5   # máximo stake por pick individual
+MAX_EXPOSURE_WARN       = 10.0  # aviso si exposición supera este umbral
+MAX_EXPOSURE_HARD       = 12.0  # nunca superar (corta picks automáticamente)
+EV_MARKET_WARNING_THRESHOLD = 25.0  # EV > 25% → advertencia + stake reducido
+EV_SUSPICIOUS_THRESHOLD     = 35.0  # EV > 35% → pick excluido del resumen
+MAX_PICKS_SUMMARY           = 5    # máximo de picks en el Resumen Ejecutivo
+MAX_MONEYLINE_ODDS          = 3.0  # no recomendar underdogs con cuota > 3.0
 
 # ── Mapeo de selecciones a tipos de pick legibles ─────────────
 _PICK_TYPE: dict[str, str] = {
@@ -34,8 +37,8 @@ _PICK_TYPE: dict[str, str] = {
     "Away":        "Ganador",
     "Spread Home": "Spread",
     "Spread Away": "Spread",
-    "Over":        "Over/Under",
-    "Under":       "Over/Under",
+    "Over":        "Over",
+    "Under":       "Under",
 }
 
 # Selecciones consideradas props — NUNCA van en el Resumen Ejecutivo
@@ -666,77 +669,117 @@ class NBAFormatter:
 
     def _format_summary(self, analyses: list) -> str:
         """
-        RESUMEN EJECUTIVO v2.9: solo Ganador / Spread / Over-Under.
-        Sin props. Stake cap 3.0u. Exposición máx 15u.
-        EV > 40% con mercado parejo → advertencia de discrepancia.
+        RESUMEN EJECUTIVO v2.9:
+        - Solo Ganador / Spread / Over / Under (nunca props).
+        - EV > 35%  → pick excluido (sospechoso, modelo diverge del mercado).
+        - EV > 25%  → stake reducido a 1.0u + advertencia de discrepancia.
+        - Moneyline odds > 3.0 → excluido (underdog de alto riesgo).
+        - Stake máx 2.5u. Exposición máx 12u (aviso desde 10u).
+        - Máximo 5 picks en el resumen.
         """
         lines = ["\n<b>RESUMEN EJECUTIVO NBA</b>\n"]
 
-        # Filtrar: solo picks de tipo moneyline / spread / totals (no props)
-        value_bets = sorted(
-            [
-                a for a in analyses
-                if a.best_bet
-                and a.best_bet.is_value
-                and a.best_bet.selection not in _PROP_SELECTIONS
-                and _PICK_TYPE.get(a.best_bet.selection)  # debe estar en el mapa
-            ],
-            key=lambda a: a.best_bet.ev_percent, reverse=True,
-        )
+        # ── 1. Candidatos: solo moneyline / spread / totals, EV válido ─
+        candidates = []
+        for a in analyses:
+            b = a.best_bet
+            if not b or not b.is_value:
+                continue
+            if not _PICK_TYPE.get(b.selection):
+                continue  # props u otros — excluir
+            if b.ev_percent > EV_SUSPICIOUS_THRESHOLD:
+                continue  # EV > 35% → demasiado sospechoso
+            if b.selection in ("Home", "Away") and b.odds > MAX_MONEYLINE_ODDS:
+                continue  # underdog de cuota muy alta — no recomendado
+            candidates.append(a)
 
-        if value_bets:
+        # Ordenar por EV desc, tomar máx MAX_PICKS_SUMMARY
+        candidates.sort(key=lambda a: a.best_bet.ev_percent, reverse=True)
+        candidates = candidates[:MAX_PICKS_SUMMARY]
+
+        if candidates:
             lines.append("<b>Apuestas recomendadas:</b>\n")
             total_stake = 0.0
 
-            for a in value_bets:
+            for a in candidates:
                 b = a.best_bet
-                pick_type = _PICK_TYPE.get(b.selection, b.selection)
-                conf_label = getattr(a, "confidence", "Media")
+                pick_type = _PICK_TYPE[b.selection]
 
-                # Stake: aplicar cap de 3.0u y respetar máximo de exposición restante
+                # ── Stake con todos los caps ──────────────────────
                 raw_stake = a.kelly.stake_units if a.kelly else 1.0
                 stake = min(raw_stake, MAX_STAKE_PER_PICK)
+
+                # EV > 25%: pick discrepante → reducir stake a máx 1.0u
+                ev_discrepancy = b.ev_percent > EV_MARKET_WARNING_THRESHOLD
+                if ev_discrepancy:
+                    stake = min(stake, 1.0)
+
+                # Respetar exposición restante
                 remaining = MAX_EXPOSURE_HARD - total_stake
                 stake = min(stake, max(remaining, 0.0))
                 stake = round(stake, 1)
-
                 if stake <= 0:
-                    continue  # Exposición máxima alcanzada
+                    break
 
                 total_stake = round(total_stake + stake, 1)
 
-                # Label de dirección para spread/moneyline
+                # ── Construcción de la línea de pick ─────────────
                 if b.selection in ("Home", "Spread Home"):
-                    direction = f"{a.home_team}"
+                    team = a.home_team
                 elif b.selection in ("Away", "Spread Away"):
-                    direction = f"{a.away_team}"
+                    team = a.away_team
                 else:
-                    direction = b.selection  # Over / Under
+                    team = None  # Over/Under no tiene equipo
 
-                # Línea de spread o total
-                line_str = ""
-                if b.line is not None and b.selection in ("Spread Home", "Spread Away", "Over", "Under"):
-                    line_str = f" {b.line:+.1f}" if b.selection in ("Spread Home", "Spread Away") else f" {b.line}"
+                if b.selection in ("Spread Home", "Spread Away") and b.line is not None:
+                    pick_desc = f"Spread: {team} {b.line:+.1f} @ {b.odds:.2f}"
+                elif b.selection in ("Home", "Away"):
+                    pick_desc = f"Ganador: {team} @ {b.odds:.2f}"
+                elif b.selection in ("Over", "Under") and b.line is not None:
+                    pick_desc = f"{pick_type} {b.line} @ {b.odds:.2f}"
+                else:
+                    pick_desc = f"{pick_type}: {b.selection} @ {b.odds:.2f}"
 
-                # Advertencia de alta discrepancia con mercado
-                ev_warn = ""
-                if b.ev_percent > EV_MARKET_WARNING_THRESHOLD:
+                # EV mostrado (cappado si hay discrepancia)
+                ev_shown = min(b.ev_percent, EV_MARKET_WARNING_THRESHOLD) if ev_discrepancy else b.ev_percent
+                ev_str = f"(EV: {ev_shown:+.1f}%)"
+
+                # Confianza: degradar a "Media" si cuota alta en moneyline
+                raw_conf = getattr(a, "confidence", "Media")
+                conf_label = str(raw_conf).capitalize()
+                if b.selection in ("Home", "Away") and b.odds > 2.40:
+                    conf_label = "Media"  # No dar Alta a underdogs/cuotas elevadas
+                if ev_discrepancy:
+                    conf_label = "Media"  # Discrepancia → siempre Media
+
+                # ── Líneas finales del pick ───────────────────────
+                lines.append(f"- <b>{a.home_team} vs {a.away_team}</b>")
+                lines.append(f"  {pick_desc} {ev_str}")
+                if ev_discrepancy:
                     market_impl = round((1 / b.odds) * 100, 1)
                     model_pct = round(b.probability * 100, 1)
-                    ev_warn = f"\n  ⚠️ Alta discrepancia con mercado (Modelo: {model_pct}% vs Mercado: {market_impl}%)"
-
-                lines.append(f"- <b>{a.home_team} vs {a.away_team}</b>")
-                lines.append(f"  {pick_type}: {direction}{line_str} @ {b.odds:.2f} (EV: {b.ev_percent:+.1f}%){ev_warn}")
-                conf_icon = "🔥" if "Alta" in str(conf_label) or conf_label == "high" else ("✅" if "Media" in str(conf_label) else "🟡")
-                lines.append(f"  Stake: {stake:.1f}u | Conf: {conf_icon} {conf_label}")
+                    lines.append(
+                        f"  ⚠️ Discrepancia modelo/mercado "
+                        f"(Modelo: {model_pct}% vs Mercado: {market_impl}%) — stake reducido"
+                    )
+                lines.append(f"  Stake: {stake:.1f}u | Conf: {conf_label}")
                 lines.append("")
 
-            # Advertencia si se acerca al límite de exposición
-            if total_stake > MAX_EXPOSURE_WARN:
-                lines.append(f"⚠️ Exposición alta ({total_stake:.1f}u). Revisa tu bankroll.")
-            lines.append(f"Exposición total: {total_stake:.1f}u")
+            # ── Línea de exposición con nivel ────────────────────
+            if total_stake < 6.0:
+                exp_level = "baja"
+            elif total_stake <= MAX_EXPOSURE_WARN:
+                exp_level = "moderada"
+            else:
+                exp_level = "alta"
+
+            lines.append(
+                f"⚠️ Exposición {exp_level} ({total_stake:.1f}u). "
+                f"Gestiona tu bankroll con cuidado."
+            )
+            lines.append(f"\nExposición total: {total_stake:.1f}u")
         else:
-            lines.append("Sin apuestas con valor hoy (Ganador/Spread/Over-Under).")
+            lines.append("Sin apuestas con valor suficiente hoy (Ganador/Spread/Over/Under).")
 
         lines.append(f"\n{'=' * 30}")
         lines.append(f"🤖 WinStake.ia {VERSION} | Análisis informativo. Apuesta responsable.")
