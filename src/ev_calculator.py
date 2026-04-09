@@ -205,10 +205,16 @@ class EVCalculator:
                 elif odd < 1.20:
                     is_value = False
 
-                # 3. Ratio de discrepancia: si el modelo es >2.5× más
+                # 3. Ratio de discrepancia: si el modelo es >2.0× más
                 #    optimista que el mercado, probablemente la diferencia
                 #    se debe a información que no tenemos (lesiones, etc.)
-                elif market_implied > 0 and (prob / market_implied) > 2.5:
+                elif market_implied > 0 and (prob / market_implied) > 2.0:
+                    is_value = False
+
+                # 4. EV irrealmente alto (>40%): el modelo diverge demasiado
+                #    del mercado. Casi nunca existe edge real de esta magnitud
+                #    en NBA (especialmente fin de temporada, equipos malos).
+                elif ev_percent > 40.0:
                     is_value = False
 
             results.append(EVResult(

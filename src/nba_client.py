@@ -6,6 +6,7 @@ No requiere API key.
 
 import logging
 import time
+from datetime import datetime, timedelta
 from typing import Optional
 
 from src.cache import APICache
@@ -54,6 +55,85 @@ class NBAClient:
     def __init__(self, api_key: str = None):
         self.cache = APICache()
         self._mock_mode = False
+        self._pace_cache: dict[int, float] = {}  # team_id -> pace (in-memory within session)
+
+    # ── Improvement 5: game window helper ────────────────────
+
+    @staticmethod
+    def _is_game_window() -> bool:
+        """Returns True if current local hour is in typical NBA game window (19:00–02:00)."""
+        hour = datetime.now().hour
+        return hour >= 19 or hour < 2
+
+    def _dvp_ttl(self) -> int:
+        """Dynamic TTL for DvP/player stats: 2h during game window, 24h otherwise."""
+        return 7200 if self._is_game_window() else 86400
+
+    def _player_stats_ttl(self) -> int:
+        """Dynamic TTL for player stats: 2h during game window, 1h otherwise."""
+        return 7200 if self._is_game_window() else 3600
+
+    # ── Improvement 1: real pace via leaguedashteamstats ─────
+
+    def get_team_pace_map(self) -> dict[int, float]:
+        """
+        Fetches PACE for all NBA teams using leaguedashteamstats.
+        Returns {team_id: pace_float}.
+        """
+        cache_key = f"nba_team_pace_{NBA_SEASON}"
+        cached = self.cache.get(cache_key, 86400)
+        if cached is not None:
+            return {int(k): v for k, v in cached.items()}
+
+        try:
+            from nba_api.stats.endpoints import leaguedashteamstats
+            time.sleep(0.6)
+            raw = leaguedashteamstats.LeagueDashTeamStats(
+                season=NBA_SEASON,
+                per_mode_simple="PerGame",
+            )
+            df = raw.get_data_frames()[0]
+            result: dict[int, float] = {}
+            for _, row in df.iterrows():
+                tid = int(row["TEAM_ID"])
+                pace = float(row.get("PACE", 100.0)) if row.get("PACE") else 100.0
+                result[tid] = round(pace, 2)
+            self.cache.set(cache_key, {str(k): v for k, v in result.items()})
+            logger.info(f"Pace cargado para {len(result)} equipos NBA")
+            return result
+        except Exception as e:
+            logger.warning(f"Error obteniendo pace NBA: {e}")
+            return {}
+
+    # ── Improvement 3: back-to-back detection ────────────────
+
+    def get_back_to_back_teams(self, game_date: str) -> set:
+        """
+        Returns a set of team_ids that played the day before game_date.
+        game_date: 'YYYY-MM-DD' string.
+        """
+        cache_key = f"nba_b2b_{game_date}_{NBA_SEASON}"
+        cached = self.cache.get(cache_key, 86400)
+        if cached is not None:
+            return set(cached)
+
+        try:
+            from nba_api.stats.endpoints import leaguegamelog
+            prev_date = (datetime.strptime(game_date, "%Y-%m-%d") - timedelta(days=1)).strftime("%m/%d/%Y")
+            time.sleep(0.6)
+            log = leaguegamelog.LeagueGameLog(
+                season=NBA_SEASON,
+                date_from_nullable=prev_date,
+                date_to_nullable=prev_date,
+            )
+            df = log.get_data_frames()[0]
+            b2b_ids = set(int(tid) for tid in df["TEAM_ID"].unique()) if not df.empty else set()
+            self.cache.set(cache_key, list(b2b_ids))
+            logger.info(f"B2B check for {game_date}: {len(b2b_ids)} teams played yesterday")
+            return b2b_ids
+        except Exception as e:
+            logger.warning(f"Error checking back-to-back for {game_date}: {e}")
+            return set()
 
     def get_standings(self) -> list[dict]:
         """Obtiene la clasificación actual de la NBA."""
@@ -72,14 +152,18 @@ class NBAClient:
             raw = leaguestandings.LeagueStandings(season=NBA_SEASON)
             df = raw.get_data_frames()[0]
 
+            # Improvement 1: fetch real pace for all teams
+            pace_map = self.get_team_pace_map()
+
             result = []
             for _, row in df.iterrows():
                 played = int(row["WINS"]) + int(row["LOSSES"])
                 ppg = float(row["PointsPG"]) if row["PointsPG"] else 0
                 opp_ppg = float(row["OppPointsPG"]) if row["OppPointsPG"] else 0
+                tid = int(row["TeamID"])
 
                 result.append({
-                    "team_id": int(row["TeamID"]),
+                    "team_id": tid,
                     "team_name": f"{row['TeamCity']} {row['TeamName']}",
                     "rank": int(row["PlayoffRank"]) if row["PlayoffRank"] else 0,
                     "played": played,
@@ -92,7 +176,7 @@ class NBAClient:
                     "streak": 0,
                     "form": str(row.get("L10", "")),
                     "conference": str(row["Conference"]),
-                    "pace": 100.0,  # nba_api no tiene pace en standings
+                    "pace": pace_map.get(tid, 100.0),  # Improvement 1: real pace
                     "std_dev_factor": 1.0,
                     "ppg": ppg,
                     "opp_ppg": opp_ppg,
@@ -232,8 +316,9 @@ class NBAClient:
         if not team_ids:
             return {}
 
-        cache_key = f"nba_player_props_{NBA_SEASON}"
-        cached = self.cache.get(cache_key, 3600)
+        # Improvement 5: season-versioned cache key + dynamic TTL
+        cache_key = f"nba_player_props_{NBA_SEASON}_v2"
+        cached = self.cache.get(cache_key, self._player_stats_ttl())
         if cached is not None:
             # JSON serializa claves int como str — normalizar
             return {tid: cached.get(str(tid), cached.get(tid, [])) for tid in team_ids}
@@ -275,6 +360,7 @@ class NBAClient:
                     "player_id": pid,
                     "player_name": str(row["PLAYER_NAME"]),
                     "gp_season": gp,
+                    "mpg_season": round(float(row.get("MIN", 0)), 1),
                     "pts_season":  round(float(row.get("PTS",  0)), 1),
                     "reb_season":  round(float(row.get("REB",  0)), 1),
                     "ast_season":  round(float(row.get("AST",  0)), 1),
@@ -284,20 +370,49 @@ class NBAClient:
                 }
 
                 l10 = l10_index.get(pid)
+                recently_traded = False
                 if l10 is not None:
+                    pts_l10  = round(float(l10.get("PTS",  0)), 1)
+                    reb_l10  = round(float(l10.get("REB",  0)), 1)
+                    ast_l10  = round(float(l10.get("AST",  0)), 1)
+                    fg3m_l10 = round(float(l10.get("FG3M", 0)), 1)
+                    stl_l10  = round(float(l10.get("STL",  0)), 1)
+                    blk_l10  = round(float(l10.get("BLK",  0)), 1)
+
+                    # Improvement 4: detect recently-traded players (L10 anomaly)
+                    # If gp_season > 20 and L10 pts diverges >50% from season avg, flag as traded
+                    pts_season = player["pts_season"]
+                    if gp > 20 and pts_season > 0 and pts_l10 > 0:
+                        ratio = pts_l10 / pts_season
+                        if ratio > 1.5 or ratio < 0.5:
+                            recently_traded = True
+                            logger.info(
+                                f"Possible traded player: {player['player_name']} "
+                                f"(season {pts_season} vs L10 {pts_l10}) — using season avg"
+                            )
+                            # Conservative fallback: use season averages for L10
+                            pts_l10  = player["pts_season"]
+                            reb_l10  = player["reb_season"]
+                            ast_l10  = player["ast_season"]
+                            fg3m_l10 = player["fg3m_season"]
+                            stl_l10  = player["stl_season"]
+                            blk_l10  = player["blk_season"]
+
                     player.update({
                         "gp_l10":   int(l10.get("GP", 0)),
-                        "pts_l10":  round(float(l10.get("PTS",  0)), 1),
-                        "reb_l10":  round(float(l10.get("REB",  0)), 1),
-                        "ast_l10":  round(float(l10.get("AST",  0)), 1),
-                        "fg3m_l10": round(float(l10.get("FG3M", 0)), 1),
-                        "stl_l10":  round(float(l10.get("STL",  0)), 1),
-                        "blk_l10":  round(float(l10.get("BLK",  0)), 1),
+                        "pts_l10":  pts_l10,
+                        "reb_l10":  reb_l10,
+                        "ast_l10":  ast_l10,
+                        "fg3m_l10": fg3m_l10,
+                        "stl_l10":  stl_l10,
+                        "blk_l10":  blk_l10,
+                        "recently_traded": recently_traded,
                     })
                 else:
                     player.update({"gp_l10": 0, "pts_l10": 0.0, "reb_l10": 0.0,
                                    "ast_l10": 0.0, "fg3m_l10": 0.0,
-                                   "stl_l10": 0.0, "blk_l10": 0.0})
+                                   "stl_l10": 0.0, "blk_l10": 0.0,
+                                   "recently_traded": False})
 
                 all_teams.setdefault(str(tid), []).append(player)
 
@@ -318,8 +433,9 @@ class NBAClient:
         Retorna cuántos PTS/REB/AST/3PM concede este equipo a cada posición (G/F/C).
         Ejemplo: {"G": {"pts": 28.5, "reb": 4.1, "ast": 6.0, "fg3m": 2.2}, ...}
         """
-        cache_key = f"nba_dvp_{team_id}_{NBA_SEASON}"
-        cached = self.cache.get(cache_key, 86400)
+        # Improvement 5: season-versioned cache key + dynamic TTL
+        cache_key = f"nba_dvp_{team_id}_{NBA_SEASON}_v2"
+        cached = self.cache.get(cache_key, self._dvp_ttl())
         if cached is not None:
             return cached
 
@@ -422,10 +538,14 @@ class NBAClient:
                 players = []
                 for inj in team_entry.get("injuries", []):
                     athlete = inj.get("athlete", {})
+                    details = inj.get("details", {})
                     players.append({
                         "player": athlete.get("displayName", ""),
+                        "position": athlete.get("position", {}).get("abbreviation", ""),
                         "status": inj.get("status", ""),
-                        "detail": inj.get("details", {}).get("detail", ""),
+                        "detail": details.get("detail", "") or details.get("type", ""),
+                        "return_date": details.get("returnDate", ""),
+                        "comment": inj.get("shortComment", ""),
                     })
                 if players:
                     result[abbr] = players

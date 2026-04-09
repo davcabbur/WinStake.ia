@@ -5,6 +5,7 @@ Bot interactivo con botones inline para seleccionar partidos de la jornada.
 
 import logging
 import asyncio
+from dataclasses import replace as dataclass_replace
 from datetime import datetime
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -27,6 +28,7 @@ from src.sports.config import get_sport, SPORTS, SportConfig, LALIGA
 from src.nba_props import generate_prop_recommendations
 from src.ev_calculator import EVResult
 from src.logger_config import setup_logging
+from src.database import DB_PATH
 
 logger = setup_logging("WinStakeBot")
 
@@ -99,14 +101,12 @@ def _apply_injury_impact(analysis, home_players: list, away_players: list, impor
         old_ev = analysis.best_bet.ev
         new_ev = old_ev * discount
         new_ev_pct = round(new_ev * 100, 2)
-        analysis.best_bet = EVResult(
-            selection=analysis.best_bet.selection,
-            probability=analysis.best_bet.probability,
-            odds=analysis.best_bet.odds,
+        # Improvement 9: use dataclasses.replace() instead of manual reconstruction
+        analysis.best_bet = dataclass_replace(
+            analysis.best_bet,
             ev=round(new_ev, 4),
             ev_percent=new_ev_pct,
             is_value=bool(new_ev >= import_config.MIN_EV_THRESHOLD),
-            line=analysis.best_bet.line,
         )
         if not analysis.best_bet.is_value:
             analysis.recommendation = "No apostar"
@@ -240,6 +240,10 @@ def _run_analysis_for_jornada(sport_config: SportConfig = None) -> dict:
             # ── Alertas de lesiones clave + ajuste automático de EV ──
             _apply_injury_impact(a, home_players, away_players, import_config=config)
 
+            # Improvement 3: detect back-to-back teams for today's games
+            game_date = datetime.now().strftime("%Y-%m-%d")
+            b2b_teams = stats_client.get_back_to_back_teams(game_date)
+
             # Recomendaciones de props
             a.prop_recommendations = generate_prop_recommendations(
                 home_team=a.home_team,
@@ -250,10 +254,47 @@ def _run_analysis_for_jornada(sport_config: SportConfig = None) -> dict:
                 away_dvp=away_dvp,
                 home_positions=home_positions,
                 away_positions=away_positions,
+                home_team_id=home_tid,
+                away_team_id=away_tid,
+                b2b_teams=b2b_teams,
             )
 
-    # 7. Guardar en BD
+    # 7. Guardar en BD + Improvement 8: line movement tracking
     db = Database()
+    for match in matches_odds:
+        mid = match.get("id", f"{match['home_team']}_{match['away_team']}")
+        if mid not in analyses:
+            continue
+        a = analyses[mid]
+        odds = match.get("avg_odds", {})
+        p = a.probabilities
+
+        spread_line = getattr(p, "market_spread", None) or None
+        total_line = getattr(p, "market_total", None) or None
+        home_odds = odds.get("home")
+        away_odds = odds.get("away")
+
+        # Save snapshot
+        db.save_line_snapshot(
+            match_id=mid,
+            sport=sc.key,
+            spread_line=spread_line,
+            total_line=total_line,
+            home_odds=home_odds,
+            away_odds=away_odds,
+        )
+
+        # Detect movement vs previous snapshot
+        movement_alert = db.detect_line_movement(
+            match_id=mid,
+            current_spread=spread_line,
+            current_total=total_line,
+            current_home_odds=home_odds,
+            current_away_odds=away_odds,
+        )
+        if movement_alert:
+            a.insights.append(movement_alert)
+
     for analysis in analyses.values():
         db.save_analysis(analysis, sport=sc.key)
 
@@ -342,6 +383,13 @@ async def _analizar_sport(update: Update, context: ContextTypes.DEFAULT_TYPE, sp
         )
 
         await update.message.reply_html(header, reply_markup=reply_markup)
+
+        # NBA: enviar Injury Report de ESPN como mensaje separado
+        if sport.sport_type == "basketball":
+            injury_report = NBAFormatter().format_injury_report(list(analyses.values()))
+            if injury_report:
+                for chunk in _split_message(injury_report):
+                    await update.message.reply_html(chunk, disable_web_page_preview=True)
 
     except (SystemExit, RuntimeError) as e:
         logger.error(f"Error en análisis: {e}")
@@ -498,6 +546,38 @@ async def match_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 
+async def _daily_backtesting_task():
+    """
+    Improvement 7: Daily background task that runs backtesting at 10:00 AM.
+    Checks unresolved picks and updates WIN/LOSS/PUSH results.
+    """
+    while True:
+        try:
+            now = datetime.now()
+            # Calculate seconds until next 10:00 AM
+            target = now.replace(hour=10, minute=0, second=0, microsecond=0)
+            if now >= target:
+                target = target.replace(day=target.day + 1)
+            wait_seconds = (target - now).total_seconds()
+            logger.info(f"Backtesting diario programado en {wait_seconds/3600:.1f}h")
+            await asyncio.sleep(wait_seconds)
+
+            # Run backtesting
+            try:
+                from src.backtester import run_backtesting_check
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, lambda: run_backtesting_check(DB_PATH))
+                logger.info("Backtesting diario completado")
+            except Exception as e:
+                logger.error(f"Error en backtesting diario: {e}", exc_info=True)
+
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"Error en tarea de backtesting: {e}", exc_info=True)
+            await asyncio.sleep(3600)  # retry in 1h on unexpected error
+
+
 def _split_message(text: str, max_length: int = 4096) -> list[str]:
     """Divide un mensaje largo en chunks."""
     if len(text) <= max_length:
@@ -544,6 +624,12 @@ def main():
     application.add_handler(CallbackQueryHandler(match_callback))
 
     logger.info("🚀 WinStake.ia Bot Daemon iniciado. Escuchando comandos de Telegram...")
+
+    # Improvement 7: start daily backtesting background task
+    async def post_init(app):
+        asyncio.create_task(_daily_backtesting_task())
+
+    application.post_init = post_init
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 

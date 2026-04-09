@@ -119,6 +119,26 @@ class NormalModel:
             away_off = away_ppg / avg_ppg
             away_def = away_opp_ppg / avg_ppg
 
+            # ── Regresión a la media para equipos muy malos ──────
+            # Equipos con win_pct < 0.28 (≈ peores 8-10 de la liga) tienden
+            # a estar en modo "tanking" al final de temporada: rotaciones
+            # cortas, sin motivación, jugadores de G-League. Sus stats de
+            # temporada sobreestiman su nivel real en estos partidos.
+            # Regresamos sus factores un 30% hacia 1.0 (media de liga).
+            def _regression(factor: float, win_pct: float) -> float:
+                if win_pct is None or win_pct >= 0.28:
+                    return factor
+                # Intensidad de regresión: 0% en win_pct=0.28 → 30% en win_pct=0.00
+                strength = min(0.30, (0.28 - win_pct) / 0.28 * 0.30)
+                return factor + strength * (1.0 - factor)
+
+            home_win_pct = home_stats.get("win_pct")
+            away_win_pct = away_stats.get("win_pct")
+            home_off = _regression(home_off, home_win_pct)
+            home_def = _regression(home_def, home_win_pct)
+            away_off = _regression(away_off, away_win_pct)
+            away_def = _regression(away_def, away_win_pct)
+
             # Puntos esperados: ataque propio * defensa rival * media liga
             # Este approach multiplicativo captura mejor las diferencias reales
             home_expected = home_off * away_def * avg_ppg

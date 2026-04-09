@@ -27,6 +27,12 @@ MIN_STAT = {
     "sb":    1.5,
 }
 
+# Umbral 3PM extra-alto para Centers (no tiradores naturales)
+_FG3M_MIN_BY_POS = {"G": 1.5, "F": 1.5, "C": 2.5}
+
+# Minutos mínimos para considerar a un jugador (evita role players de pocas rotaciones)
+_MIN_MPG = 15.0
+
 STAT_LABELS = {
     "pts":  ("PTS",  "puntos"),
     "reb":  ("REB",  "rebotes"),
@@ -64,33 +70,44 @@ def _estimated_book_odds(confidence: float) -> float:
 
 def _ensure_diversity(recs: list, target_total: int = 12) -> list:
     """
-    Asegura que el top del ranking tenga al menos 5 categorías distintas.
+    Asegura que el top del ranking tenga al menos 6 categorías distintas
+    y no más de 2 props del mismo jugador.
     Algoritmo:
       1. Para cada categoría en DIVERSITY_PRIORITY, elige el mejor rec disponible.
-      2. Rellena hasta target_total con los de mayor confianza restantes.
+      2. Rellena hasta target_total respetando el límite de 2 por jugador.
     Devuelve lista ordenada por confianza.
     """
     sorted_recs = sorted(recs, key=lambda x: x["confidence_score"], reverse=True)
-    used_ids: set = set()
+    # Improvement 10: use (player, stat_key) tuple instead of id() for deduplication
+    used_keys: set = set()
+    player_count: dict = {}
     selected: list = []
 
-    # Fase 1: una rep por categoría (máximo 5 distintas)
+    # Fase 1: una rep por categoría (máximo 6 distintas)
     for cat in DIVERSITY_PRIORITY:
-        if len(selected) >= min(5, len(DIVERSITY_PRIORITY)):
+        if len(selected) >= min(6, len(DIVERSITY_PRIORITY)):
             break
         for r in sorted_recs:
-            if id(r) not in used_ids and r["stat_key"] == cat:
-                selected.append(r)
-                used_ids.add(id(r))
-                break
+            key = (r["player"], r["stat_key"])
+            if key not in used_keys and r["stat_key"] == cat:
+                pname = r["player"]
+                if player_count.get(pname, 0) < 2:
+                    selected.append(r)
+                    used_keys.add(key)
+                    player_count[pname] = player_count.get(pname, 0) + 1
+                    break
 
-    # Fase 2: rellenar con los de mayor confianza
+    # Fase 2: rellenar con los de mayor confianza (max 2 por jugador)
     for r in sorted_recs:
         if len(selected) >= target_total:
             break
-        if id(r) not in used_ids:
-            selected.append(r)
-            used_ids.add(id(r))
+        key = (r["player"], r["stat_key"])
+        if key not in used_keys:
+            pname = r["player"]
+            if player_count.get(pname, 0) < 2:
+                selected.append(r)
+                used_keys.add(key)
+                player_count[pname] = player_count.get(pname, 0) + 1
 
     # Reordenar el resultado final por confianza
     return sorted(selected, key=lambda x: x["confidence_score"], reverse=True)
@@ -105,22 +122,37 @@ def generate_prop_recommendations(
     away_dvp: dict,
     home_positions: dict,
     away_positions: dict,
+    home_team_id: int = None,
+    away_team_id: int = None,
+    b2b_teams: set = None,
 ) -> list[dict]:
     """
     Genera hasta 12 recomendaciones diversificadas (≥5 categorías distintas).
     Filtra solo jugadores del roster actual (via positions dict).
+
+    Improvement 3: b2b_teams — set of team_ids on back-to-back (optional).
     """
     recs = []
+    b2b = b2b_teams or set()
 
     home_roster_ids = set(home_positions.keys())
     away_roster_ids = set(away_positions.keys())
+
+    # Improvement 3: determine if defending team is on B2B (their defense is weaker)
+    home_on_b2b = home_team_id in b2b if home_team_id else False
+    away_on_b2b = away_team_id in b2b if away_team_id else False
 
     count = 0
     for p in away_players:
         if p["player_id"] not in away_roster_ids:
             continue
         pos = _primary_position(away_positions.get(p["player_id"], "F"))
-        recs += _player_recs(p, away_team, pos, home_dvp.get(pos, {}))
+        # Defending team for away players is the home team
+        recs += _player_recs(
+            p, away_team, pos, home_dvp.get(pos, {}),
+            attacker_on_b2b=away_on_b2b,
+            defender_on_b2b=home_on_b2b,
+        )
         count += 1
         if count >= 10:
             break
@@ -130,7 +162,12 @@ def generate_prop_recommendations(
         if p["player_id"] not in home_roster_ids:
             continue
         pos = _primary_position(home_positions.get(p["player_id"], "F"))
-        recs += _player_recs(p, home_team, pos, away_dvp.get(pos, {}))
+        # Defending team for home players is the away team
+        recs += _player_recs(
+            p, home_team, pos, away_dvp.get(pos, {}),
+            attacker_on_b2b=home_on_b2b,
+            defender_on_b2b=away_on_b2b,
+        )
         count += 1
         if count >= 10:
             break
@@ -138,8 +175,19 @@ def generate_prop_recommendations(
     return _ensure_diversity(recs, target_total=12)
 
 
-def _player_recs(player: dict, team: str, pos: str, dvp: dict) -> list[dict]:
-    """Genera recs para PTS/REB/AST/3PM/PRA/S+B de un jugador."""
+def _player_recs(
+    player: dict,
+    team: str,
+    pos: str,
+    dvp: dict,
+    attacker_on_b2b: bool = False,
+    defender_on_b2b: bool = False,
+) -> list[dict]:
+    """Genera recs para PTS/REB/AST/3PM/PRA/S+B de un jugador.
+
+    Improvement 3: attacker_on_b2b reduces confidence by 0.05;
+                   defender_on_b2b boosts dvp_factor by 1.08 (weaker defense).
+    """
     recs = []
     league = LEAGUE_AVG_DVP.get(pos, LEAGUE_AVG_DVP["F"])
 
@@ -161,11 +209,21 @@ def _player_recs(player: dict, team: str, pos: str, dvp: dict) -> list[dict]:
     base["sb"] = (sb_s, sb_l)
 
     gp = player.get("gp_season", 0)
+    mpg = player.get("mpg_season", 0.0)
+
+    # Filtrar jugadores con muy pocos minutos (role players de fondo de rotación)
+    if mpg > 0 and mpg < _MIN_MPG:
+        return []
 
     for stat_key, (stat_lbl, stat_name) in STAT_LABELS.items():
         season_avg, l10_avg = base[stat_key]
 
-        if season_avg < MIN_STAT[stat_key]:
+        # Umbral dinámico por posición para 3PM (Centers necesitan barra más alta)
+        min_threshold = MIN_STAT[stat_key]
+        if stat_key == "fg3m":
+            min_threshold = _FG3M_MIN_BY_POS.get(pos, 1.5)
+
+        if season_avg < min_threshold:
             continue
         if gp < 10:
             continue
@@ -182,6 +240,10 @@ def _player_recs(player: dict, team: str, pos: str, dvp: dict) -> list[dict]:
 
         dvp_factor = dvp_val / league_avg if league_avg > 0 else 1.0
 
+        # Improvement 3: defender on B2B → their defense is ~8% weaker
+        if defender_on_b2b:
+            dvp_factor *= 1.08
+
         effective_l10 = l10_avg if l10_avg > 0 else season_avg
         projected = (effective_l10 * 0.6 + season_avg * 0.4) * dvp_factor
 
@@ -190,18 +252,28 @@ def _player_recs(player: dict, team: str, pos: str, dvp: dict) -> list[dict]:
             continue
 
         l10_for_conf = l10_avg if l10_avg > 0 else season_avg
-        confidence = _compute_confidence(season_avg, l10_for_conf, dvp_factor, projected, threshold)
+        confidence = _compute_confidence(
+            season_avg, l10_for_conf, dvp_factor, projected, threshold, gp, mpg
+        )
         if l10_avg == 0:
             confidence *= 0.85
+        # Improvement 3: attacker on B2B → reduce confidence by 0.05
+        if attacker_on_b2b:
+            confidence -= 0.05
         if confidence < 0.45:
             continue
 
         direction = "concede" if dvp_factor > 1.05 else ("restringe" if dvp_factor < 0.95 else "neutro en")
         l10_text = f"{l10_avg:.1f}" if l10_avg > 0 else "N/D"
+        b2b_note = ""
+        if attacker_on_b2b:
+            b2b_note = " [⚠️ B2B jugador]"
+        if defender_on_b2b:
+            b2b_note += " [⚡ Rival B2B]"
         reason = (
             f"Rival {direction} {(dvp_factor-1)*100:+.0f}% {stat_name} a su posición "
             f"(DvP {dvp_val:.1f} vs liga {league_avg:.1f}). "
-            f"Temp: {season_avg:.1f} | Últ10: {l10_text}"
+            f"Temp: {season_avg:.1f} | Últ10: {l10_text}{b2b_note}"
         )
 
         recs.append({
@@ -224,7 +296,17 @@ def _player_recs(player: dict, team: str, pos: str, dvp: dict) -> list[dict]:
     return recs
 
 
-def _compute_confidence(season_avg, l10_avg, dvp_factor, projected, threshold) -> float:
+def _compute_confidence(
+    season_avg, l10_avg, dvp_factor, projected, threshold,
+    gp: int = 40, mpg: float = 25.0,
+) -> float:
+    """
+    Compute confidence score for a prop.
+
+    Penalties applied:
+    - Sample size: scales from 0.80 (10 GP) to 1.00 (40+ GP)
+    - Minutes: scales from 0.75 (15 MPG) to 1.00 (28+ MPG), penalizes role players
+    """
     if projected <= 0:
         return 0.0
     margin_score = min((projected - threshold) / projected, 0.4) / 0.4
@@ -233,4 +315,18 @@ def _compute_confidence(season_avg, l10_avg, dvp_factor, projected, threshold) -
     else:
         consistency = 0.5
     dvp_edge = min(max((dvp_factor - 1.0) * 2, -0.5), 0.5) + 0.5
-    return margin_score * 0.5 + consistency * 0.3 + dvp_edge * 0.2
+    raw = margin_score * 0.5 + consistency * 0.3 + dvp_edge * 0.2
+
+    # Sample size penalty: 0.80 at 10 GP → 1.00 at 40+ GP
+    sample_factor = min(1.0, 0.80 + (gp - 10) * (0.20 / 30))
+    sample_factor = max(0.80, sample_factor)
+
+    # Minutes penalty: 0.75 at 15 MPG → 1.00 at 28+ MPG
+    # Role players with unstable minutes are less predictable
+    if mpg > 0:
+        mpg_factor = min(1.0, 0.75 + (mpg - _MIN_MPG) * (0.25 / 13))
+        mpg_factor = max(0.75, mpg_factor)
+    else:
+        mpg_factor = 1.0
+
+    return raw * sample_factor * mpg_factor
