@@ -1,5 +1,6 @@
 """
-WinStake.ia v2.5 — Formateador NBA para Telegram
+WinStake.ia v2.6 — Formateador NBA para Telegram
+Bot conservador: blend modelo-mercado, EV realista, props con MPG filter.
 """
 
 import logging
@@ -7,16 +8,19 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-VERSION = "v2.5"
-MODEL_TAG = "Normal Distribution + DvP + Monte Carlo (en desarrollo) | Kelly ½"
+VERSION = "v2.6"
+MODEL_TAG = "Normal Distribution + DvP | Kelly ½ | Blend modelo-mercado aplicado"
 
 # ── Límites de cuota combinada ────────────────────────────────
-SAFE_ODDS_MIN   = 2.10
+SAFE_ODDS_MIN   = 1.85
 SAFE_ODDS_MAX   = 2.90
 SAFE_ODDS_HARD  = 3.00   # nunca superar en SAFE (drop legs si hace falta)
 AGG_ODDS_MIN    = 4.50
 AGG_ODDS_MAX    = 7.50
-AGG_ODDS_HARD   = 9.00   # nunca superar
+AGG_ODDS_HARD   = 8.00   # nunca superar
+
+# EV a partir del cual se muestra advertencia de discrepancia con mercado
+EV_MARKET_WARNING_THRESHOLD = 35.0
 
 
 # ─────────────────────────────────────────────────────────────
@@ -138,6 +142,47 @@ def _build_correlated_picks(analyses: list) -> list[str]:
             unique.append(p)
             seen.add(p)
     return unique[:5]
+
+
+def _injury_impact_v26(status: str, ppg: float, pos: str) -> str:
+    """
+    Genera texto de impacto contextual para v2.6:
+    combina status, PPG y posición para indicar qué mercados afecta.
+    """
+    status_low = status.lower()
+    pos_up = pos.upper() if pos else ""
+    is_out = "out" in status_low
+    is_doubt = "doubtful" in status_low
+    is_q = "questionable" in status_low or "day-to-day" in status_low
+
+    if ppg >= 20.0:
+        severity = "alto"
+        markets = "spread y moneyline"
+    elif ppg >= 12.0:
+        severity = "medio"
+        markets = "spread y props del equipo"
+    elif ppg >= 6.0:
+        severity = "bajo"
+        markets = "props de rotación"
+    else:
+        return ""
+
+    if pos_up in ("G", "PG", "SG"):
+        prop_detail = "Impacto en props de AST y 3PM del equipo"
+    elif pos_up in ("F", "SF", "PF"):
+        prop_detail = "Impacto en props de PTS/PRA del equipo"
+    elif pos_up in ("C",):
+        prop_detail = "Impacto en props de REB del equipo"
+    else:
+        prop_detail = f"Impacto en props del equipo"
+
+    if is_out:
+        return f"Impacto {severity} en {markets}. {prop_detail}."
+    elif is_doubt:
+        return f"Impacto {severity} si no juega — {markets}. {prop_detail}."
+    elif is_q:
+        return f"Impacto {severity} si descansa — vigilar confirmación oficial."
+    return ""
 
 
 def _injury_impact_text(status: str, ppg: float) -> str:
@@ -370,8 +415,8 @@ class NBAFormatter:
         # Footer
         lines.append("")
         lines.append(
-            f"<i>🤖 WinStake.ia {VERSION} | Normal Distribution + DvP + Monte Carlo (en desarrollo) | "
-            f"Kelly ½ | EV = (prob × cuota) − 1 | /roi</i>"
+            f"<i>🤖 WinStake.ia {VERSION} | Normal Distribution + DvP | "
+            f"Kelly ½ | EV = (prob × cuota) − 1 | Blend modelo-mercado aplicado | /roi</i>"
         )
         lines.append(f"\n{'=' * 30}")
         return "\n".join(lines)
@@ -462,44 +507,75 @@ class NBAFormatter:
 
     def format_parlay(self, analyses: list, roi_summary: dict = None) -> str:
         """
-        Formato v2.5:
-        🩹 Lesiones + impacto | 🛡️ SAFE (2 legs, 2.1-2.9x) | 💥 AGGRESSIVE (3 legs exactos, 4.5-7.5x)
-        🎯 Props (8-10, ≥6 cats, max 2 por jugador) | 🔗 Correlated (3-5) | Footer exacto
+        Formato v2.6:
+        🩹 Lesiones + impacto contextual | 🛡️ SAFE (1-2 legs, 1.85-2.90x)
+        💥 AGGRESSIVE (3 legs, 4.5-7.5x) | 🎯 Props (8-10, ≥6 cats) | 🔗 Correlated | Footer v2.6
         """
         lines = []
         lines.append("🎰 <b>COMBINADA RECOMENDADA — NBA</b>")
         lines.append(f"📅 {datetime.now().strftime('%d/%m/%Y %H:%M')}\n")
 
-        # ── Sección de lesiones ───────────────────────────────
-        # Recoger TODOS los lesionados (no solo estrellas), ordenados por PPG
-        all_alerts = sorted(
-            [al for a in analyses for al in getattr(a, "injury_alerts", [])],
-            key=lambda x: x["ppg"], reverse=True,
-        )
-        # Deduplicar por nombre de jugador
-        seen_players: set = set()
-        unique_alerts = []
-        for al in all_alerts:
-            if al["player"] not in seen_players:
-                unique_alerts.append(al)
-                seen_players.add(al["player"])
+        # ── Sección de lesiones con impacto contextual ────────
+        # Recoger lesiones de ESPN (todas, no solo estrellas), ordenadas por PPG
+        all_injuries_raw: list[dict] = []
+        for a in analyses:
+            injuries = getattr(a, "injuries", {})
+            props = getattr(a, "player_props", {})
+            alerts = getattr(a, "injury_alerts", [])
+
+            ppg_map: dict[str, float] = {}
+            pos_map: dict[str, str] = {}
+            for side in ("home", "away"):
+                for p in props.get(side, []):
+                    ppg_map[p["player_name"].lower()] = p.get("pts_season", 0.0)
+            for al in alerts:
+                ppg_map[al["player"].lower()] = al.get("ppg", ppg_map.get(al["player"].lower(), 0.0))
+
+            for side, team_name in [("home", a.home_team), ("away", a.away_team)]:
+                for inj in injuries.get(side, []):
+                    status_low = inj.get("status", "").lower()
+                    if not any(s in status_low for s in ("out", "doubtful", "questionable", "day-to-day")):
+                        continue
+                    player = inj.get("player", "")
+                    ppg = ppg_map.get(player.lower(), 0.0)
+                    pos = inj.get("position", "")
+                    all_injuries_raw.append({
+                        "player": player,
+                        "team": team_name,
+                        "status": inj.get("status", ""),
+                        "detail": inj.get("detail", ""),
+                        "pos": pos,
+                        "ppg": ppg,
+                    })
+
+        # Deduplicar y ordenar por PPG
+        seen_inj: set = set()
+        unique_injuries = []
+        for inj in sorted(all_injuries_raw, key=lambda x: x["ppg"], reverse=True):
+            if inj["player"] not in seen_inj:
+                unique_injuries.append(inj)
+                seen_inj.add(inj["player"])
 
         lines.append("🩹 <b>LESIONES CLAVE</b>")
-        if unique_alerts:
-            for al in unique_alerts[:6]:
-                status_low = al["status"].lower()
+        if unique_injuries:
+            for inj in unique_injuries[:8]:
+                status_low = inj["status"].lower()
                 icon = "🔴" if "out" in status_low else ("🟠" if "doubtful" in status_low else "🟡")
-                detail = f" ({al['detail']})" if al.get("detail") else ""
-                ppg_str = f", {al['ppg']:.0f} PPG" if al["ppg"] > 0 else ""
-                impact = _injury_impact_text(al["status"], al["ppg"])
+                ppg_str = f", {inj['ppg']:.0f} PPG" if inj["ppg"] >= 5.0 else ""
+                pos_str = f" ({inj['pos']})" if inj["pos"] else ""
+                detail_str = f" · {inj['detail']}" if inj.get("detail") else ""
+                # Impacto contextual
+                impact = _injury_impact_v26(inj["status"], inj["ppg"], inj.get("pos", ""))
                 lines.append(
-                    f"   {icon} <b>{al['player']}</b> ({al['team']}{ppg_str}) "
-                    f"— {al['status']}{detail}"
-                    + (f"\n      ↳ {impact}" if impact else "")
+                    f"   {icon} <b>{inj['player']}</b>{pos_str} ({inj['team']}{ppg_str})"
+                    f" — {inj['status']}{detail_str}"
+                    + (f"\n      → {impact}" if impact else "")
                 )
         else:
-            lines.append("   Sin bajas confirmadas disponibles ahora.")
-        lines.append("   <i>Sin API en tiempo real — verifica siempre antes de apostar.</i>")
+            lines.append(
+                "   Varias questionable reportadas. "
+                "Verifica reportes oficiales antes de apostar."
+            )
         lines.append("")
 
         # ── Recopilar datos ───────────────────────────────────
@@ -554,14 +630,15 @@ class NBAFormatter:
         if not value_bets and not all_props:
             lines.append("❌ No hay picks con valor suficiente hoy.")
 
-        # ── Footer exacto v2.4 ────────────────────────────────
+        # ── Footer exacto v2.6 ────────────────────────────────
         roi_str = _roi_str(roi_summary)
         lines.append("─" * 32)
-        lines.append("⚠️ <i>Cuotas estimadas. Verifica en tu casa de apuestas.</i>")
-        lines.append("⚠️ <i>Lesiones pueden cambiar el value drásticamente.</i>")
+        lines.append("⚠️ <i>Cuotas estimadas. Verifica siempre en tu casa de apuestas.</i>")
+        lines.append("⚠️ <i>Las lesiones pueden cambiar el value drásticamente. Revisa reportes oficiales.</i>")
         lines.append(
-            f"<i>🤖 WinStake.ia {VERSION} | Normal Distribution + DvP + Monte Carlo (en desarrollo) | "
-            f"Kelly ½ | EV = (prob × cuota) − 1 | Último ROI: {roi_str} (/roi)</i>"
+            f"<i>🤖 WinStake.ia {VERSION} | Normal Distribution + DvP | "
+            f"Kelly ½ | EV = (prob × cuota) − 1 | Blend modelo-mercado aplicado | "
+            f"Último ROI: {roi_str} (/roi)</i>"
         )
         return "\n".join(lines)
 
@@ -646,37 +723,56 @@ def _diversify_global_props(props: list, total: int = 10) -> list:
 
 def _build_safe_picks(value_bets: list, all_props: list) -> list[dict]:
     """
-    Construye 2 picks SAFE (cuota objetivo 2.1-2.9x).
-    Prioriza result bets EV+; si no hay suficientes usa top props.
+    Construye 1-2 picks SAFE (cuota combinada 1.85x-2.90x).
+    - Solo result bets con cuota individual 1.50-2.20 (favoritos limpios).
+    - Si 2 legs superan 2.90x combinado, usa solo 1 (Single Pick SAFE).
+    - Completa con props de alta confianza si no hay result bets.
     """
-    picks = []
+    candidates = []
 
-    for a, b in value_bets[:2]:
+    for a, b in value_bets:
+        # Solo favoritos o ligeramente underdogs — cuotas muy altas elevan combinada
+        if b.odds < 1.50 or b.odds > 2.20:
+            continue
         conf_icon = {"Alta": "🟢", "Media": "🟡", "Baja": "🔴"}.get(a.confidence, "⚪")
-        picks.append({
+        candidates.append({
             "label": f"{b.selection} ({a.home_team} vs {a.away_team})",
             "odds": b.odds,
             "model_prob": b.probability,
             "ev_pct": b.ev_percent,
             "conf_icon": conf_icon,
             "type": "resultado",
+            "single": False,
         })
 
-    # Completar con props si faltan legs
+    # Completar con props de alta confianza (≥0.65) si faltan legs
     for r in all_props:
-        if len(picks) >= 2:
+        if len(candidates) >= 2:
             break
+        if r["confidence_score"] < 0.65:
+            continue
         odds = r.get("estimated_odds", 1.85)
-        picks.append({
-            "label": f"{r['player']} Over {r['threshold']} {r['stat_label']} ({r['match']})",
+        candidates.append({
+            "label": f"{r['player']} ({r.get('pos','?')}) Over {r['threshold']} {r['stat_label']} ({r['match']})",
             "odds": odds,
             "model_prob": r["confidence_score"],
             "ev_pct": None,
             "conf_icon": _conf_icon(r["confidence_score"]),
             "type": "prop",
+            "single": False,
         })
 
-    return picks[:2]
+    if not candidates:
+        return []
+
+    # Intentar 2 legs dentro del rango; si supera SAFE_ODDS_HARD → bajar a 1
+    two = candidates[:2]
+    if len(two) == 2 and _combined_odds(two) <= SAFE_ODDS_HARD:
+        return two
+    # Single Pick SAFE
+    best = candidates[:1]
+    best[0]["single"] = True
+    return best
 
 
 def _combined_odds(picks: list) -> float:
@@ -700,38 +796,37 @@ def _format_safe_section(picks: list) -> list[str]:
     if not picks:
         return []
 
-    # Aplicar hard cap (nunca >8x)
-    picks = _trim_to_hard_cap(picks, SAFE_ODDS_HARD)
+    is_single = picks[0].get("single", False) or len(picks) == 1
     co = _combined_odds(picks)
     model_prob = _model_combined_prob(picks)
 
-    # Nota de rango
-    range_note = ""
-    if co < SAFE_ODDS_MIN:
-        range_note = " ⚠️ cuota baja (escasez de EV hoy)"
-    elif co > SAFE_ODDS_MAX:
-        range_note = " ⚠️ cuota ligeramente alta"
+    label_tag = "Single Pick SAFE ⚠️ escasez de picks conservadores" if is_single else "2 legs"
+    lines = [f"🛡️ <b>SAFE ({label_tag}) — Bajo riesgo | Cuota objetivo 1.85x-2.90x</b>"]
 
-    lines = [f"🛡️ <b>SAFE (2 legs) — Bajo riesgo | Cuota objetivo 2.1x-2.9x</b>"]
     for i, p in enumerate(picks, 1):
-        ev_str = f" | EV: {p['ev_pct']:+.1f}%" if p.get("ev_pct") is not None else ""
+        ev_str = ""
+        if p.get("ev_pct") is not None:
+            ev_str = f" | EV: {p['ev_pct']:+.1f}%"
+            if p["ev_pct"] > EV_MARKET_WARNING_THRESHOLD:
+                ev_str += " ⚠️ <i>Alta discrepancia con mercado</i>"
         odds_str = f"@ {p['odds']:.2f}" if p["type"] == "resultado" else f"@ ~{p['odds']:.2f} (est.)"
         lines.append(f"   {i}. <b>{p['label']}</b> {odds_str} {p['conf_icon']}{ev_str}")
 
-    # Improvement 6: distinguish real vs estimated odds in combined display
     has_props = any(p["type"] == "prop" for p in picks)
-    all_results = all(p["type"] == "resultado" for p in picks)
-    if all_results:
-        odds_display = f"{co:.2f}x"
-    else:
-        odds_display = f"~{co:.2f}x (incl. cuotas estimadas)"
+    odds_display = f"~{co:.2f}x" if has_props else f"{co:.2f}x"
+
+    range_note = ""
+    if co < SAFE_ODDS_MIN:
+        range_note = " ⚠️ cuota baja"
+    elif co > SAFE_ODDS_MAX:
+        range_note = " ⚠️ cuota en límite superior"
 
     lines.append(
         f"   <b>Cuota combinada: {odds_display}</b>{range_note} | "
-        f"Prob. estimada modelo: {model_prob:.0f}% | Stake: 1.8-2.2u"
+        f"Prob. estimada modelo: {model_prob:.0f}% | Stake: 2.0u"
     )
     if has_props:
-        lines.append("   ⚠️ <i>Cuotas de props son estimadas (~1.75-1.90). Confirma en tu casa.</i>")
+        lines.append("   ⚠️ <i>Cuotas de props estimadas. Confirma en tu casa.</i>")
     lines.append("")
     return lines
 
@@ -826,18 +921,22 @@ def _format_aggressive_section(picks: list) -> list[str]:
     elif co > AGG_ODDS_MAX:
         range_note = " ⚠️ cuota alta, stake mínimo"
 
-    lines = [f"💥 <b>AGGRESSIVE (3 legs) — Riesgo medio | Cuota objetivo 4.5x-7.5x</b>"]
+    lines = [f"💥 <b>AGGRESSIVE ({n} legs) — Riesgo medio | Cuota objetivo 4.5x-7.5x</b>"]
     for i, p in enumerate(picks, 1):
         if p["type"] == "prop":
             conf_str = f" [{p.get('conf_pct', 0)}%]"
             lines.append(f"   {i}. {p['label']} @ ~{p['odds']:.2f} (est.){conf_str}")
         else:
-            ev_str = f" | EV: {p['ev_pct']:+.1f}%" if p.get("ev_pct") is not None else ""
+            ev_str = ""
+            if p.get("ev_pct") is not None:
+                ev_str = f" | EV: {p['ev_pct']:+.1f}%"
+                if p["ev_pct"] > EV_MARKET_WARNING_THRESHOLD:
+                    ev_str += " ⚠️ <i>Alta discrepancia con mercado</i>"
             lines.append(f"   {i}. <b>{p['label']}</b> @ {p['odds']:.2f} {p['conf_icon']}{ev_str}")
 
     lines.append(
         f"   <b>Cuota combinada: ~{co:.2f}x</b>{range_note} | "
-        f"Prob. estimada modelo: {model_prob:.0f}% | Stake: 0.5-0.8u"
+        f"Prob. estimada modelo: {model_prob:.0f}% | Stake: 0.6u"
     )
     lines.append("")
     return lines
