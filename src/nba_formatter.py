@@ -608,8 +608,13 @@ class NBAFormatter:
         lines.append("")
 
         # ── Recopilar datos ───────────────────────────────────
+        # Excluir picks con EV sospechoso (>35%) — mismo filtro que RESUMEN EJECUTIVO
         value_bets = sorted(
-            [(a, a.best_bet) for a in analyses if a.best_bet and a.best_bet.is_value],
+            [
+                (a, a.best_bet) for a in analyses
+                if a.best_bet and a.best_bet.is_value
+                and a.best_bet.ev_percent <= EV_SUSPICIOUS_THRESHOLD
+            ],
             key=lambda x: x[1].ev_percent, reverse=True,
         )
         all_props: list[dict] = []
@@ -639,7 +644,7 @@ class NBAFormatter:
                 )
                 lines.append(
                     f"   {_dvp_icon(r['dvp_factor'])} {r['match']} | "
-                    f"Temp: {r['season_avg']} | Últ10: {_l10(r)}"
+                    f"Temp: {r['season_avg']:.1f} | Últ10: {_l10(r)}"
                 )
             lines.append("")
 
@@ -879,6 +884,9 @@ def _build_safe_picks(value_bets: list, all_props: list) -> list[dict]:
         # Solo favoritos o ligeramente underdogs — cuotas muy altas elevan combinada
         if b.odds < 1.50 or b.odds > 2.20:
             continue
+        # SAFE requiere prob ≥65% — picks más seguros únicamente
+        if b.probability < 0.65:
+            continue
         conf_icon = {"Alta": "🟢", "Media": "🟡", "Baja": "🔴"}.get(a.confidence, "⚪")
         candidates.append({
             "label": f"{b.selection} ({a.home_team} vs {a.away_team})",
@@ -985,8 +993,10 @@ def _build_aggressive_picks(value_bets: list, all_props: list) -> list[dict]:
     picks = []
     used_matches: set = set()
 
-    # Primer leg: mejor result bet
-    for a, b in value_bets[:1]:
+    # Primer leg: mejor result bet con prob ≥55%
+    for a, b in value_bets:
+        if b.probability < 0.55:
+            continue
         mk = f"{a.home_team}_{a.away_team}"
         used_matches.add(mk)
         conf_icon = {"Alta": "🟢", "Media": "🟡", "Baja": "🔴"}.get(a.confidence, "⚪")
@@ -998,6 +1008,7 @@ def _build_aggressive_picks(value_bets: list, all_props: list) -> list[dict]:
             "conf_icon": conf_icon,
             "type": "resultado",
         })
+        break  # Solo el mejor leg de resultado
 
     # Legs adicionales: props de partidos distintos, diversificando categorías
     used_cats: set = set()

@@ -361,6 +361,7 @@ class NBAClient:
 
                 player: dict = {
                     "player_id": pid,
+                    "team_id": tid,
                     "player_name": str(row["PLAYER_NAME"]),
                     "gp_season": gp,
                     "mpg_season": round(float(row.get("MIN", 0)), 1),

@@ -146,6 +146,13 @@ def generate_prop_recommendations(
     for p in away_players:
         if p["player_id"] not in away_roster_ids:
             continue
+        # Cross-validate team_id to prevent wrong-team players (e.g. stale cache)
+        if away_team_id and p.get("team_id") and p["team_id"] != away_team_id:
+            logger.warning(
+                f"Player {p['player_name']} team_id mismatch: "
+                f"expected {away_team_id} ({away_team}), got {p['team_id']} — skipping"
+            )
+            continue
         pos = _primary_position(away_positions.get(p["player_id"], "F"))
         # Defending team for away players is the home team
         recs += _player_recs(
@@ -160,6 +167,13 @@ def generate_prop_recommendations(
     count = 0
     for p in home_players:
         if p["player_id"] not in home_roster_ids:
+            continue
+        # Cross-validate team_id to prevent wrong-team players (e.g. stale cache)
+        if home_team_id and p.get("team_id") and p["team_id"] != home_team_id:
+            logger.warning(
+                f"Player {p['player_name']} team_id mismatch: "
+                f"expected {home_team_id} ({home_team}), got {p['team_id']} — skipping"
+            )
             continue
         pos = _primary_position(home_positions.get(p["player_id"], "F"))
         # Defending team for home players is the away team
@@ -200,12 +214,12 @@ def _player_recs(
         "blk":  (player.get("blk_season",  0), player.get("blk_l10",  0)),
     }
 
-    pra_s = base["pts"][0] + base["reb"][0] + base["ast"][0]
-    pra_l = base["pts"][1] + base["reb"][1] + base["ast"][1]
+    pra_s = round(base["pts"][0] + base["reb"][0] + base["ast"][0], 1)
+    pra_l = round(base["pts"][1] + base["reb"][1] + base["ast"][1], 1)
     base["pra"] = (pra_s, pra_l)
 
-    sb_s = base["stl"][0] + base["blk"][0]
-    sb_l = base["stl"][1] + base["blk"][1]
+    sb_s = round(base["stl"][0] + base["blk"][0], 1)
+    sb_l = round(base["stl"][1] + base["blk"][1], 1)
     base["sb"] = (sb_s, sb_l)
 
     gp = player.get("gp_season", 0)
