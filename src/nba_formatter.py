@@ -29,7 +29,7 @@ MAX_EXPOSURE_HARD           = 15.0  # hard cap — nunca superar
 EV_MARKET_WARNING_THRESHOLD = 25.0  # EV > 25% → advertencia + stake reducido
 EV_SUSPICIOUS_THRESHOLD     = 35.0  # EV > 35% → pick excluido del resumen
 MAX_PICKS_SUMMARY           = 6    # máximo de picks en el Resumen Ejecutivo
-MAX_MONEYLINE_ODDS          = 3.0  # no recomendar underdogs con cuota > 3.0
+MAX_MONEYLINE_ODDS          = 2.50  # si CUALQUIER equipo supera esta cuota, ML bloqueado para el partido
 MIN_PROB_THRESHOLD          = 0.52  # probabilidad mínima del modelo para recomendar
 
 # ── Mapeo de selecciones a tipos de pick legibles ─────────────
@@ -732,12 +732,23 @@ class NBAFormatter:
                 direction = "Over" if b.selection == "Over" else "Under"
                 pick_desc = f"Totales: {direction}"
 
+            # ── ¿Está el ML bloqueado para este partido? ──────────
+            # Si CUALQUIER equipo tiene cuota ML > 2.50, Moneyline queda
+            # completamente prohibido: el modelo pivota a Spread/Totales.
+            market = getattr(a, "market_odds", {})
+            home_ml = market.get("home") or 0.0
+            away_ml = market.get("away") or 0.0
+            ml_bloqueado = (
+                b.selection in ("Home", "Away")
+                and max(home_ml, away_ml) > MAX_MONEYLINE_ODDS
+            )
+
             # ── Clasificar: PICK OFICIAL o TENDENCIA ─────────────
             es_oficial = (
                 b.is_value
                 and b.probability >= MIN_PROB_THRESHOLD
                 and 1.0 <= b.ev_percent <= EV_SUSPICIOUS_THRESHOLD
-                and not (b.selection in ("Home", "Away") and b.odds > MAX_MONEYLINE_ODDS)
+                and not ml_bloqueado
                 and not ev_over_limit
                 and oficiales < MAX_PICKS_SUMMARY
                 and (MAX_EXPOSURE_HARD - total_stake) >= 0.5
