@@ -154,13 +154,14 @@ class Analyzer:
         # 3. Mejor apuesta
         best = self._ev_calc.find_best_bet(ev_results)
 
-        # ── ML priority: si el Spread del FAVORITO supera 12 pts ─────────
-        # En partidos muy desequilibrados, apostar el Spread del favorito es
-        # arriesgado (garbage time puede destruir el hándicap). Se prefiere el
-        # ML si está disponible con cuota ≥ 1.25; si no, No Bet.
-        _ML_PRIORITY_SPREAD_THRESHOLD = 12.0
+        # ── ML priority: spread de mercado >12.5 pts Y margen modelo >10 pts ──
+        # Doble condición: si el mercado Y el modelo coinciden en que el partido
+        # está muy desequilibrado, apostar el Spread es arriesgado (garbage time).
+        # Se prefiere el ML si está disponible con cuota ≥ 1.25; si no, No Bet.
+        _ML_PRIORITY_SPREAD_THRESHOLD = 12.5
+        _ML_PRIORITY_MODEL_MARGIN = 10.0
         if best and best.selection in ("Spread Home", "Spread Away") and best.line is not None:
-            if best.line < -_ML_PRIORITY_SPREAD_THRESHOLD:
+            if best.line < -_ML_PRIORITY_SPREAD_THRESHOLD and abs(probs.spread) > _ML_PRIORITY_MODEL_MARGIN:
                 fav_ml_sel = "Home" if best.selection == "Spread Home" else "Away"
                 fav_ml = next((r for r in ev_results if r.selection == fav_ml_sel), None)
                 if fav_ml and fav_ml.odds >= 1.25:

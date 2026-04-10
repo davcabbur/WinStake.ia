@@ -7,6 +7,14 @@ import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from src.nba_tiers import (
+    get_team_tier,
+    TIER_B_STAKE_CAP as _TIER_B_STAKE_CAP,
+    TIER_C_MIN_SPREAD as _TIER_C_MIN_SPREAD,
+    TIER_C_TOTAL_BIAS_LINE as _TIER_C_TOTAL_BIAS_LINE,
+    TIER_A_SPECULATIVE_STAKE as _TIER_A_SPECULATIVE_STAKE,
+)
+
 _SPAIN_TZ = ZoneInfo("Europe/Madrid")
 
 logger = logging.getLogger(__name__)
@@ -782,6 +790,36 @@ class NBAFormatter:
             # ML No-Bet: cuota < 1.25 → payout tan bajo que no hay valor real
             ml_no_bet = b.selection in ("Home", "Away") and b.odds < 1.25
 
+            # ── Tier classification (v3.3 Tactical Manager) ─────────────
+            home_tier = get_team_tier(a.home_team)
+            away_tier = get_team_tier(a.away_team)
+            tier_a_in_match = home_tier == "A" or away_tier == "A"
+
+            # Over → Under bias: total >235 + Tier C tankeando → preferir Under
+            if (
+                b.selection == "Over" and b.line is not None
+                and b.line > _TIER_C_TOTAL_BIAS_LINE
+                and (home_tier == "C" or away_tier == "C")
+            ):
+                _ev_inner = getattr(a, "ev_results", [])
+                _under_r = next((r for r in _ev_inner if r.selection == "Under"), None)
+                if _under_r and (_under_r.is_value or _under_r.is_marginal or _under_r.ev_percent > 0):
+                    b = _under_r
+
+            # Tier C never-bet: no apostar A FAVOR de equipos tankeando
+            # Excepción: spread >20 pts (línea tan amplia que puede cubrirse)
+            if b.selection in ("Home", "Away"):
+                _bet_tier = home_tier if b.selection == "Home" else away_tier
+                tier_c_block = (_bet_tier == "C")
+            elif b.selection in ("Spread Home", "Spread Away"):
+                _bet_tier = home_tier if b.selection == "Spread Home" else away_tier
+                tier_c_block = (
+                    _bet_tier == "C"
+                    and (b.line is None or abs(b.line) <= _TIER_C_MIN_SPREAD)
+                )
+            else:
+                tier_c_block = False
+
             prob_pct = round(b.probability * 100, 1)
             ev_over_limit = b.ev_percent > EV_SUSPICIOUS_THRESHOLD
 
@@ -813,6 +851,7 @@ class NBAFormatter:
                 and 1.0 <= b.ev_percent <= EV_SUSPICIOUS_THRESHOLD
                 and not ml_bloqueado
                 and not ml_no_bet               # ML No-Bet: odds < 1.25
+                and not tier_c_block            # Tier C: equipo tankeando
                 and not ev_over_limit
                 and oficiales < MAX_PICKS_SUMMARY
                 and (MAX_EXPOSURE_HARD - total_stake) >= 0.5
@@ -825,6 +864,10 @@ class NBAFormatter:
                 # Picks marginales (1-3% EV): stake máx 1.0u
                 if b.is_marginal and not b.is_value:
                     stake = min(stake, 1.0)
+
+                # ── Tier B stake cap: posibles descansos / rotaciones ────────
+                if home_tier == "B" or away_tier == "B":
+                    stake = min(stake, _TIER_B_STAKE_CAP)
 
                 # ── Spread masivo (>15 pts): cap 1.5u por garbage time ──────
                 # Solo aplica a picks de tipo Spread. En Totales, el garbage
@@ -873,17 +916,37 @@ class NBAFormatter:
                     f"(Prob: {prob_pct}% | EV: {b.ev_percent:+.1f}%)"
                 )
                 if ev_over_limit:
-                    warn_str = (
-                        " ⚠️ Protocolo Stake 0u: EV >{:.0f}% — "
-                        "Sabiduría del Mercado > Cálculo del Modelo".format(EV_SUSPICIOUS_THRESHOLD)
-                    )
-                    # Marcar el análisis para excluirlo de combinadas
-                    a.stake_zero_overheat = True
+                    if tier_a_in_match:
+                        # Tier A presente: motivación máxima → stake especulativo
+                        _spec = _TIER_A_SPECULATIVE_STAKE
+                        _remaining = MAX_EXPOSURE_HARD - total_stake
+                        _spec = max(min(_spec, _remaining), 0.0)
+                        if _spec > 0:
+                            total_stake = round(total_stake + _spec, 1)
+                        lines.append(
+                            f"  Stake: {_spec:.1f}u | Conf: Especulativo "
+                            f"💡 Tier A — EV >{EV_SUSPICIOUS_THRESHOLD:.0f}% + motivación máxima"
+                        )
+                    else:
+                        # Tier B/C o sin clasificar: Sabiduría del Mercado
+                        a.stake_zero_overheat = True
+                        lines.append(
+                            f"  Stake: 0u | Conf: Tendencia ⚠️ Protocolo Stake 0u: "
+                            f"EV >{EV_SUSPICIOUS_THRESHOLD:.0f}% — "
+                            "Sabiduría del Mercado > Cálculo del Modelo"
+                        )
                 elif ml_no_bet:
-                    warn_str = f" 🚫 No Bet: ML cuota {b.odds:.2f} < 1.25 — payout sin valor real"
+                    lines.append(
+                        f"  Stake: 0u | Conf: Tendencia "
+                        f"🚫 No Bet: ML cuota {b.odds:.2f} < 1.25 — payout sin valor real"
+                    )
+                elif tier_c_block:
+                    lines.append(
+                        "  Stake: 0u | Conf: Tendencia "
+                        "⛔ Tier C — equipo tankeando (sin motivación)"
+                    )
                 else:
-                    warn_str = ""
-                lines.append(f"  Stake: 0u | Conf: Tendencia{warn_str}")
+                    lines.append("  Stake: 0u | Conf: Tendencia")
 
             lines.append("")
 
