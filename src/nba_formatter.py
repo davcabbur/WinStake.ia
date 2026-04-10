@@ -826,8 +826,9 @@ class NBAFormatter:
                 # En abril, los últimos 5 min de garbage time (suplentes vs
                 # suplentes) pueden destruir un hándicap de 18 pts sin aviso.
                 # Se detecta por el spread de mercado o el spread del modelo.
-                _mkt_spread = abs(getattr(p, "market_spread", 0) or 0)
-                _mdl_spread = abs(getattr(p, "spread", 0) or 0)
+                _probs = a.probabilities
+                _mkt_spread = abs(getattr(_probs, "market_spread", 0) or 0)
+                _mdl_spread = abs(getattr(_probs, "spread", 0) or 0)
                 _game_spread = _mkt_spread if _mkt_spread > 0 else _mdl_spread
                 large_spread = _game_spread > LARGE_SPREAD_THRESHOLD
                 if large_spread:
