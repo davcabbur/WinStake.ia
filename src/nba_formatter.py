@@ -823,14 +823,17 @@ class NBAFormatter:
                     stake = min(stake, 1.0)
 
                 # ── Spread masivo (>15 pts): cap 1.5u por garbage time ──────
-                # En abril, los últimos 5 min de garbage time (suplentes vs
-                # suplentes) pueden destruir un hándicap de 18 pts sin aviso.
-                # Se detecta por el spread de mercado o el spread del modelo.
+                # Solo aplica a picks de tipo Spread. En Totales, el garbage
+                # time puede inflarte el Over (suplentes sin defensa anotan
+                # mucho), por lo que no se penaliza el stake allí.
                 _probs = a.probabilities
                 _mkt_spread = abs(getattr(_probs, "market_spread", 0) or 0)
                 _mdl_spread = abs(getattr(_probs, "spread", 0) or 0)
                 _game_spread = _mkt_spread if _mkt_spread > 0 else _mdl_spread
-                large_spread = _game_spread > LARGE_SPREAD_THRESHOLD
+                large_spread = (
+                    b.selection in ("Spread Home", "Spread Away")
+                    and _game_spread > LARGE_SPREAD_THRESHOLD
+                )
                 if large_spread:
                     stake = min(stake, MAX_STAKE_LARGE_SPREAD)
 
