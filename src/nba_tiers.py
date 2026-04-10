@@ -35,10 +35,14 @@ TIER_LABELS: dict[str, str] = {
 
 # Stake máximo para apuestas que implican a un Tier B (posible descanso)
 TIER_B_STAKE_CAP: float = 1.5
+# Stake máximo para Tier B + spread masivo (>15 pts): rotaciones casi seguras
+TIER_B_LARGE_SPREAD_CAP: float = 0.5
 # Spread mínimo para apostar A FAVOR de un Tier C
 TIER_C_MIN_SPREAD: float = 20.0
 # Línea de total a partir de la cual aplica el bias Under con Tier C
 TIER_C_TOTAL_BIAS_LINE: float = 235.0
+# Stake máximo en picks de Totales cuando hay un equipo Tier C involucrado
+TIER_C_TOTALS_STAKE_CAP: float = 1.5
 # Stake especulativo cuando EV > 35% pero el equipo es Tier A
 TIER_A_SPECULATIVE_STAKE: float = 1.0
 

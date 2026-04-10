@@ -10,8 +10,10 @@ from zoneinfo import ZoneInfo
 from src.nba_tiers import (
     get_team_tier,
     TIER_B_STAKE_CAP as _TIER_B_STAKE_CAP,
+    TIER_B_LARGE_SPREAD_CAP as _TIER_B_LARGE_SPREAD_CAP,
     TIER_C_MIN_SPREAD as _TIER_C_MIN_SPREAD,
     TIER_C_TOTAL_BIAS_LINE as _TIER_C_TOTAL_BIAS_LINE,
+    TIER_C_TOTALS_STAKE_CAP as _TIER_C_TOTALS_STAKE_CAP,
     TIER_A_SPECULATIVE_STAKE as _TIER_A_SPECULATIVE_STAKE,
 )
 
@@ -869,6 +871,13 @@ class NBAFormatter:
                 if home_tier == "B" or away_tier == "B":
                     stake = min(stake, _TIER_B_STAKE_CAP)
 
+                # ── Tier C + Totals: anotación errática → cap 1.5u ──────────
+                # Un equipo tankeando puede salir con suplentes y hundir el Over
+                # (o dispararlo sin defensa). El spread del partido ya está
+                # desequilibrado; no merece exponer más de 1.5u en Totales.
+                if (home_tier == "C" or away_tier == "C") and b.selection in ("Over", "Under"):
+                    stake = min(stake, _TIER_C_TOTALS_STAKE_CAP)
+
                 # ── Spread masivo (>15 pts): cap 1.5u por garbage time ──────
                 # Solo aplica a picks de tipo Spread. En Totales, el garbage
                 # time puede inflarte el Over (suplentes sin defensa anotan
@@ -883,6 +892,12 @@ class NBAFormatter:
                 )
                 if large_spread:
                     stake = min(stake, MAX_STAKE_LARGE_SPREAD)
+
+                # ── Tier B + spread masivo: rotaciones casi seguras → 0.5u ──
+                # Si el partido está tan desequilibrado que el Tier B ya descansa
+                # titulares, el spread se destruye en Q4. Doble penalización.
+                if large_spread and (home_tier == "B" or away_tier == "B"):
+                    stake = min(stake, _TIER_B_LARGE_SPREAD_CAP)
 
                 remaining = MAX_EXPOSURE_HARD - total_stake
                 stake = max(min(stake, remaining), 0.5)
@@ -904,11 +919,16 @@ class NBAFormatter:
                     f"  {pick_desc} @ {b.odds:.2f} "
                     f"(Prob: {prob_pct}% | EV: {b.ev_percent:+.1f}%)"
                 )
-                spread_note = (
-                    f" ⚠️ Spread masivo ({_game_spread:.0f} pts) — garbage time risk"
-                    if large_spread else ""
-                )
-                lines.append(f"  Stake: {stake:.1f}u | Conf: {conf_label}{spread_note}")
+                tier_notes = []
+                if large_spread:
+                    if home_tier == "B" or away_tier == "B":
+                        tier_notes.append(f"⚠️ Tier B + spread masivo ({_game_spread:.0f} pts) — rotaciones + garbage time")
+                    else:
+                        tier_notes.append(f"⚠️ Spread masivo ({_game_spread:.0f} pts) — garbage time risk")
+                if (home_tier == "C" or away_tier == "C") and b.selection in ("Over", "Under"):
+                    tier_notes.append("⚠️ Tier C — totales erráticos (tanking)")
+                tier_note_str = (" " + " | ".join(tier_notes)) if tier_notes else ""
+                lines.append(f"  Stake: {stake:.1f}u | Conf: {conf_label}{tier_note_str}")
             else:
                 # Tendencia: EV siempre en primera línea, warning inline con Stake
                 lines.append(
