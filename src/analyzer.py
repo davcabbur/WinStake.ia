@@ -51,6 +51,9 @@ class MatchAnalysis:
     team_last10: dict = field(default_factory=dict)       # {"home": [...], "away": [...]}
     injuries: dict = field(default_factory=dict)          # {"home": [...], "away": [...]}
     injury_alerts: list = field(default_factory=list)    # jugadores clave lesionados [{player, team, status, ppg}]
+    blowout_context: object = None                        # BlowoutContext (NBA only)
+    quarter_projections: list = field(default_factory=list)  # Q1-Q4 proyecciones (NBA only)
+    stake_zero_overheat: bool = False                     # EV >40%: Stake 0u por Sabiduría de Mercado
 
 
 class Analyzer:
@@ -215,6 +218,19 @@ class Analyzer:
             if abs(home_wpct - away_wpct) > 0.200:
                 better = home_team if home_wpct > away_wpct else away_team
                 insights.append(f"{better} es claramente superior en record de temporada")
+
+            # Filtro Abril: avisar si algún equipo está eliminado (falta incentivo defensivo)
+            _PLAYOFF_CUTOFF = 0.40
+            if home_wpct is not None and home_wpct < _PLAYOFF_CUTOFF:
+                insights.append(
+                    f"📅 Filtro Abril: {home_team} eliminado de playoffs "
+                    f"(win_pct {home_wpct:.0%}) — defensa inflada +15%, total al alza"
+                )
+            if away_wpct is not None and away_wpct < _PLAYOFF_CUTOFF:
+                insights.append(
+                    f"📅 Filtro Abril: {away_team} eliminado de playoffs "
+                    f"(win_pct {away_wpct:.0%}) — defensa inflada +15%, total al alza"
+                )
 
             # Pace
             home_pace = home_stats.get("pace", 100)

@@ -26,6 +26,8 @@ from src.formatter import Formatter
 from src.nba_formatter import NBAFormatter
 from src.sports.config import get_sport, SPORTS, SportConfig, LALIGA
 from src.nba_props import generate_prop_recommendations
+from src.blowout_adjuster import detect_blowout, adjust_over_for_blowout
+from src.normal_model import NormalModel as _NormalModel
 from src.ev_calculator import EVResult
 from src.logger_config import setup_logging
 from src.database import DB_PATH
@@ -34,6 +36,18 @@ logger = setup_logging("WinStakeBot")
 
 # Umbral PPG para considerar a un jugador como "estrella"
 _STAR_PPG_THRESHOLD = 18.0
+
+# TIER_1: superestrellas cuya baja impacta la eficiencia ofensiva del equipo más
+# allá de sus PPG (system players, usage muy alto, generadores de juego únicos).
+# Matching por fragmento de nombre en minúsculas.
+_TIER_1_FRAGMENTS = frozenset({
+    "curry", "embiid", "jokic", "giannis", "antetokounmpo",
+    "doncic", "durant", "james", "tatum", "leonard",
+    "lillard", "booker", "butler", "davis", "mitchell",
+    "edwards", "wembanyama", "gilgeous-alexander", "sga",
+})
+# Reducción porcentual sobre el total proyectado cuando TIER_1 está Out
+_TIER1_TOTAL_REDUCTION = 0.04   # 4%
 
 
 def _apply_injury_impact(analysis, home_players: list, away_players: list, import_config) -> None:
@@ -155,6 +169,44 @@ def _apply_injury_impact(analysis, home_players: list, away_players: list, impor
             f"[Lesiones] {analysis.home_team} vs {analysis.away_team}: "
             f"total {orig_total:.0f} → {adj_total:.0f} "
             f"| Over prob {probs.over_total:.3f}"
+        )
+
+    # ── CAPA 2.5: TIER_1 baja confirmada → −4% al total proyectado ─────────
+    # La pérdida de eficiencia ofensiva de un TIER_1 (generador de juego único,
+    # uso muy alto) tiende a ser mayor que su PPG sugiere. Se aplica una
+    # reducción adicional fija del 4% al total, independiente del EV inicial.
+    tier1_out_players = [
+        a["player"]
+        for a in alerts
+        if "out" in a["status"].lower()
+        and any(frag in a["player"].lower() for frag in _TIER_1_FRAGMENTS)
+    ]
+    if tier1_out_players:
+        probs = analysis.probabilities
+        pre_total = probs.home_score + probs.away_score
+        t1_adj_factor = 1.0 - _TIER1_TOTAL_REDUCTION
+        new_home = round(probs.home_score * t1_adj_factor, 1)
+        new_away = round(probs.away_score * t1_adj_factor, 1)
+        new_total = new_home + new_away
+        std_total = (probs.std_home**2 + probs.std_away**2) ** 0.5
+        market_total = probs.market_total or analysis.market_odds.get("total_line", new_total)
+        new_over_t1 = round(float(_norm.sf(market_total, loc=new_total, scale=std_total)), 4)
+        new_under_t1 = round(1.0 - new_over_t1, 4)
+        analysis.probabilities = dataclass_replace(
+            probs,
+            home_score=new_home,
+            away_score=new_away,
+            total_score=round(new_total, 1),
+            over_total=new_over_t1,
+            under_total=new_under_t1,
+        )
+        analysis.insights.insert(0,
+            f"⭐ TIER_1 baja: {', '.join(tier1_out_players)} — "
+            f"total ajustado {pre_total:.0f} → {new_total:.0f} pts (−{_TIER1_TOTAL_REDUCTION:.0%})"
+        )
+        logger.info(
+            f"[TIER_1] {analysis.home_team} vs {analysis.away_team}: "
+            f"total {pre_total:.0f} → {new_total:.0f} | Over {new_over_t1:.3f}"
         )
 
     # ── CAPA 3: Ajuste de EV por tipo de apuesta ─────────────────────────
@@ -354,7 +406,48 @@ def _run_analysis_for_jornada(sport_config: SportConfig = None) -> dict:
             # ── Alertas de lesiones clave + ajuste automático de EV ──
             _apply_injury_impact(a, home_players, away_players, import_config=config)
 
-            # Improvement 3: detect back-to-back teams for today's games
+            # ── Blowout & Garbage Time detection ─────────────────────────
+            probs = a.probabilities
+            blowout_ctx = detect_blowout(
+                probs.home_score, probs.away_score, probs.std_diff
+            )
+            a.blowout_context = blowout_ctx
+
+            # Si hay blowout proyectado, ajustar prob de Over en la apuesta principal
+            if blowout_ctx.is_blowout and a.best_bet and a.best_bet.selection == "Over":
+                new_over = adjust_over_for_blowout(probs.over_total, blowout_ctx)
+                if new_over != probs.over_total:
+                    new_ev = (new_over * a.best_bet.odds) - 1.0
+                    new_ev_pct = round(new_ev * 100, 2)
+                    a.probabilities = dataclass_replace(
+                        probs,
+                        over_total=new_over,
+                        under_total=round(1.0 - new_over, 4),
+                    )
+                    a.best_bet = dataclass_replace(
+                        a.best_bet,
+                        probability=round(new_over, 4),
+                        ev=round(new_ev, 4),
+                        ev_percent=new_ev_pct,
+                        is_value=bool(new_ev >= config.MIN_EV_THRESHOLD),
+                        is_marginal=bool(
+                            config.MARGINAL_EV_THRESHOLD <= new_ev < config.MIN_EV_THRESHOLD
+                        ),
+                    )
+                    a.insights.insert(0,
+                        f"🏀 Over ajustado por blowout proyectado "
+                        f"({blowout_ctx.projected_spread:.0f} pts, "
+                        f"P={blowout_ctx.blowout_prob:.0%}) → Over prob "
+                        f"{probs.over_total:.1%} → {new_over:.1%}"
+                    )
+
+            # ── Proyecciones por cuarto ───────────────────────────────────
+            std_total = (probs.std_home**2 + probs.std_away**2) ** 0.5
+            a.quarter_projections = _NormalModel().quarter_projections(
+                probs.total_score, std_total, blowout_ctx
+            )
+
+            # Detect back-to-back teams for today's games
             game_date = datetime.now().strftime("%Y-%m-%d")
             b2b_teams = stats_client.get_back_to_back_teams(game_date)
 
@@ -371,6 +464,7 @@ def _run_analysis_for_jornada(sport_config: SportConfig = None) -> dict:
                 home_team_id=home_tid,
                 away_team_id=away_tid,
                 b2b_teams=b2b_teams,
+                blowout_ctx=blowout_ctx,
             )
 
     # 7. Guardar en BD + Improvement 8: line movement tracking

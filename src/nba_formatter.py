@@ -27,7 +27,7 @@ MAX_STAKE_PER_PICK          = 2.5   # máximo stake por pick individual
 MAX_EXPOSURE_WARN           = 12.0  # aviso si exposición supera 12u (rango recomendado: 6-12u)
 MAX_EXPOSURE_HARD           = 15.0  # hard cap — nunca superar
 EV_MARKET_WARNING_THRESHOLD = 25.0  # EV > 25% → advertencia + stake reducido
-EV_SUSPICIOUS_THRESHOLD     = 35.0  # EV > 35% → pick excluido del resumen
+EV_SUSPICIOUS_THRESHOLD     = 40.0  # EV > 40% → Stake 0u, Sabiduría del Mercado > Modelo
 MAX_PICKS_SUMMARY           = 6    # máximo de picks en el Resumen Ejecutivo
 MAX_MONEYLINE_ODDS          = 2.50  # si CUALQUIER equipo supera esta cuota, ML bloqueado para el partido
 MIN_PROB_THRESHOLD          = 0.52  # probabilidad mínima del modelo para recomendar
@@ -88,6 +88,21 @@ def _model_combined_prob(picks: list) -> float:
     return round(p * 100, 1)
 
 
+def _is_stake_zero(a) -> bool:
+    """
+    Devuelve True si el análisis tiene Stake 0u por cualquier motivo:
+    - stake_zero_overheat: EV > EV_SUSPICIOUS_THRESHOLD (protocolo Sabiduría del Mercado)
+    - best_bet con EV > EV_SUSPICIOUS_THRESHOLD (marcado en tiempo real)
+    Estos análisis quedan PROHIBIDOS en combinadas y correlated picks.
+    """
+    if getattr(a, "stake_zero_overheat", False):
+        return True
+    b = getattr(a, "best_bet", None)
+    if b is not None and b.ev_percent > EV_SUSPICIOUS_THRESHOLD:
+        return True
+    return False
+
+
 def _build_correlated_picks(analyses: list) -> list[str]:
     """
     Genera sugerencias de correlated picks.
@@ -96,10 +111,13 @@ def _build_correlated_picks(analyses: list) -> list[str]:
       2. Dos props del mismo partido con sinergia (ej. Over + alto anotador).
       3. Cualquier resultado + el prop de mayor confianza del partido.
     Devuelve al menos 3 sugerencias si hay datos suficientes.
+
+    PROHIBICIÓN: ningún análisis con Stake 0u por protocolo Sabiduría del Mercado
+    puede aparecer en combinadas (Feature 4 v3.2).
     """
     picks = []
 
-    for a in analyses:
+    for a in [x for x in analyses if not _is_stake_zero(x)]:
         recs = getattr(a, "prop_recommendations", [])
         bb = a.best_bet
 
@@ -139,9 +157,10 @@ def _build_correlated_picks(analyses: list) -> list[str]:
                 )
 
     # Tipo 3: fallback — si no llegamos a 3, añadir combinaciones cruzadas entre partidos
+    # Solo de análisis sin Stake 0u (Feature 4)
     if len(picks) < 3:
         all_top = []
-        for a in analyses:
+        for a in [x for x in analyses if not _is_stake_zero(x)]:
             recs = getattr(a, "prop_recommendations", [])
             if recs:
                 all_top.append((recs[0], f"{a.home_team} vs {a.away_team}"))
@@ -341,7 +360,30 @@ class NBAFormatter:
             ou.append(f"Under: {a.market_odds['under']}")
         if ou:
             lines.append(f"   Cuotas: {' | '.join(ou)}")
+
+        # Blowout warning en Totals
+        blowout = getattr(a, "blowout_context", None)
+        if blowout and blowout.is_blowout:
+            fav_label = a.home_team if blowout.favored_team == "home" else a.away_team
+            lines.append(
+                f"   ⚠️ <i>Blowout proyectado ({blowout.projected_spread:.0f} pts, "
+                f"P={blowout.blowout_prob:.0%}) — Over reducido por garbage time "
+                f"Q4 ({fav_label} favorito)</i>"
+            )
         lines.append("")
+
+        # 3b. Proyecciones por cuarto
+        quarters = getattr(a, "quarter_projections", [])
+        if quarters:
+            lines.append("<b>3b. Proyecciones por cuarto</b>")
+            for q in quarters:
+                q4_note = " ⚠️ <i>garbage time</i>" if q.get("blowout_q4") else ""
+                lines.append(
+                    f"   <b>{q['quarter']}</b>: {q['expected']:.0f} pts "
+                    f"(O/U {q['line']}: {q['over_pct']:.0f}% / {q['under_pct']:.0f}%)"
+                    f"{q4_note}"
+                )
+            lines.append("")
 
         # 4. EV
         lines.append("<b>4. Análisis de Valor (EV)</b>")
@@ -608,12 +650,13 @@ class NBAFormatter:
         lines.append("")
 
         # ── Recopilar datos ───────────────────────────────────
-        # Excluir picks con EV sospechoso (>35%) — mismo filtro que RESUMEN EJECUTIVO
+        # Excluir picks con EV >40% (Protocolo Stake 0u / Sabiduría del Mercado)
+        # y picks marcados explícitamente con stake_zero_overheat.
         value_bets = sorted(
             [
                 (a, a.best_bet) for a in analyses
                 if a.best_bet and a.best_bet.is_value
-                and a.best_bet.ev_percent <= EV_SUSPICIOUS_THRESHOLD
+                and not _is_stake_zero(a)
             ],
             key=lambda x: x[1].ev_percent, reverse=True,
         )
@@ -804,7 +847,15 @@ class NBAFormatter:
                     f"  {pick_desc} @ {b.odds:.2f} "
                     f"(Prob: {prob_pct}% | EV: {b.ev_percent:+.1f}%)"
                 )
-                warn_str = " ⚠️ Discrepancia excesiva con mercado" if ev_over_limit else ""
+                if ev_over_limit:
+                    warn_str = (
+                        " ⚠️ Protocolo Stake 0u: EV >{:.0f}% — "
+                        "Sabiduría del Mercado > Cálculo del Modelo".format(EV_SUSPICIOUS_THRESHOLD)
+                    )
+                    # Marcar el análisis para excluirlo de combinadas
+                    a.stake_zero_overheat = True
+                else:
+                    warn_str = ""
                 lines.append(f"  Stake: 0u | Conf: Tendencia{warn_str}")
 
             lines.append("")

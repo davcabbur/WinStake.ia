@@ -139,6 +139,27 @@ class NormalModel:
             away_off = _regression(away_off, away_win_pct)
             away_def = _regression(away_def, away_win_pct)
 
+            # ── Filtro de Volatilidad "Abril" (End of Season) ────────
+            # Equipos eliminados de playoffs (win_pct < 0.40) carecen de
+            # incentivo defensivo en las últimas semanas de temporada.
+            # Su defensa real permite ~15% más que sus stats históricas sugieren.
+            # → Multiplicamos el factor defensivo del equipo que está eliminado.
+            _PLAYOFF_WIN_PCT_CUTOFF  = 0.40
+            _APRIL_DEFENSE_INFLATOR = 1.15  # +15% puntos permitidos
+
+            if home_win_pct is not None and home_win_pct < _PLAYOFF_WIN_PCT_CUTOFF:
+                home_def *= _APRIL_DEFENSE_INFLATOR
+                logger.debug(
+                    f"Filtro Abril: {home_stats.get('team', 'home')} "
+                    f"(win_pct={home_win_pct:.2f}) — home_def ×{_APRIL_DEFENSE_INFLATOR}"
+                )
+            if away_win_pct is not None and away_win_pct < _PLAYOFF_WIN_PCT_CUTOFF:
+                away_def *= _APRIL_DEFENSE_INFLATOR
+                logger.debug(
+                    f"Filtro Abril: {away_stats.get('team', 'away')} "
+                    f"(win_pct={away_win_pct:.2f}) — away_def ×{_APRIL_DEFENSE_INFLATOR}"
+                )
+
             # Puntos esperados: ataque propio * defensa rival * media liga
             # Este approach multiplicativo captura mejor las diferencias reales
             home_expected = home_off * away_def * avg_ppg
@@ -343,6 +364,63 @@ class NormalModel:
                 "under_prob": round(1.0 - over, 4),
                 "over_pct": round(over * 100, 1),
                 "under_pct": round((1.0 - over) * 100, 1),
+            })
+
+        return result
+
+    def quarter_projections(
+        self,
+        total_expected: float,
+        std_total: float,
+        blowout_ctx=None,
+    ) -> list[dict]:
+        """
+        Proyecciones de puntos totales por cuarto (Q1-Q4).
+
+        Distribución estándar NBA 2024-25:
+          Q1: 26%   Q2: 26%   Q3: 25.5%   Q4: 22.5%  (suma = 100%)
+
+        En blowouts confirmados (blowout_prob > 0.30), Q4 se reduce
+        a 20% porque el favorito saca titulares antes del final.
+
+        Desviación estándar por cuarto se escala como:
+          σ_Q = σ_full × √(weight × 4)
+        (mayor varianza relativa en períodos más cortos).
+
+        Returns list of dicts: quarter, expected, std, over_line, over_pct, under_pct
+        """
+        # Pesos base por cuarto
+        weights = {"Q1": 0.260, "Q2": 0.260, "Q3": 0.255, "Q4": 0.225}
+
+        # En blowout proyectado, reducir Q4 y redistribuir levemente
+        is_blowout = blowout_ctx is not None and getattr(blowout_ctx, "is_blowout", False)
+        if is_blowout:
+            blowout_prob = getattr(blowout_ctx, "blowout_prob", 0.30)
+            # Q4 se reduce de 22.5% hasta 20% según la severidad del blowout
+            q4_reduction = min(0.025, (blowout_prob - 0.30) / 0.40 * 0.025)
+            weights["Q4"] = round(weights["Q4"] - q4_reduction, 4)
+            # Redistribuir la reducción en Q1-Q3 para mantener suma ≈ 100%
+            dist = q4_reduction / 3
+            weights["Q1"] = round(weights["Q1"] + dist, 4)
+            weights["Q2"] = round(weights["Q2"] + dist, 4)
+            weights["Q3"] = round(weights["Q3"] + dist, 4)
+
+        result = []
+        for q, w in weights.items():
+            q_expected = round(total_expected * w, 1)
+            # Escalar σ para el cuarto: más varianza relativa en períodos cortos
+            q_std = round(std_total * (w * 4) ** 0.5, 1)
+            # Línea de O/U estándar de mercado para este cuarto (redondear a .5)
+            q_line = round(q_expected * 2) / 2  # .0 o .5
+            over = float(norm.sf(q_line, loc=q_expected, scale=q_std))
+            result.append({
+                "quarter":   q,
+                "expected":  q_expected,
+                "std":       q_std,
+                "line":      q_line,
+                "over_pct":  round(over * 100, 1),
+                "under_pct": round((1.0 - over) * 100, 1),
+                "blowout_q4": is_blowout and q == "Q4",
             })
 
         return result

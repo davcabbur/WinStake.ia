@@ -1,14 +1,35 @@
 """
-WinStake.ia v2.3 — NBA Player Props & DvP Recommendations
+WinStake.ia v2.4 — NBA Player Props & DvP Recommendations
 Genera recomendaciones diversificadas con al menos 5 categorías distintas:
   PTS | REB | AST | 3PM | PRA | S+B
 usando Defense vs Position (DvP) + últimos 10 partidos + media de temporada.
+
+Mejoras v2.4:
+  - Blowout & Garbage Time Adjuster: reduce confianza en AST/PRA de forwards
+    en victorias proyectadas cómodas.
+  - Hot teammate weight: si un compañero de equipo está en racha anotadora
+    (L10 pts ≥ 20% sobre media de temporada y >18 pts), se reduce la
+    proyección de asistencias del forward del mismo equipo.
+  - Umbrales estrictos para forwards: AST solo recomendada con ≥27 MPG
+    proyectados y confianza mínima de 0.60.
 """
 
 import math
 import logging
 
+from src.blowout_adjuster import BlowoutContext, adjust_prop_confidence_for_blowout
+
 logger = logging.getLogger(__name__)
+
+# Minutos mínimos para props de AST de forwards (más estricto que el mínimo general)
+_MIN_MPG_FORWARD_AST = 27.0
+# Confianza mínima para recomendar AST de forward
+_MIN_CONF_FORWARD_AST = 0.60
+# Umbral de "hot scorer": L10 > season × factor Y L10 pts por encima de este valor
+_HOT_SCORER_L10_FACTOR = 1.20
+_HOT_SCORER_L10_MIN    = 18.0
+# Factor de reducción de asistencias cuando hay un hot scorer en el mismo equipo
+_HOT_TEAMMATE_AST_REDUCTION = 0.08  # 8% de reducción en projected assists
 
 # ── Media de liga por posición (2025-26) ────────────────────
 LEAGUE_AVG_DVP = {
@@ -113,6 +134,20 @@ def _ensure_diversity(recs: list, target_total: int = 12) -> list:
     return sorted(selected, key=lambda x: x["confidence_score"], reverse=True)
 
 
+def _detect_hot_scorers(players: list, positions: dict) -> set:
+    """
+    Devuelve el conjunto de player_ids con racha anotadora activa:
+      L10 pts ≥ season_pts × _HOT_SCORER_L10_FACTOR  Y  L10 pts ≥ _HOT_SCORER_L10_MIN
+    """
+    hot: set = set()
+    for p in players:
+        pts_s = p.get("pts_season", 0)
+        pts_l = p.get("pts_l10", 0)
+        if pts_l >= _HOT_SCORER_L10_MIN and pts_s > 0 and pts_l >= pts_s * _HOT_SCORER_L10_FACTOR:
+            hot.add(p["player_id"])
+    return hot
+
+
 def generate_prop_recommendations(
     home_team: str,
     away_team: str,
@@ -125,12 +160,15 @@ def generate_prop_recommendations(
     home_team_id: int = None,
     away_team_id: int = None,
     b2b_teams: set = None,
+    blowout_ctx: "BlowoutContext | None" = None,
 ) -> list[dict]:
     """
     Genera hasta 12 recomendaciones diversificadas (≥5 categorías distintas).
     Filtra solo jugadores del roster actual (via positions dict).
 
-    Improvement 3: b2b_teams — set of team_ids on back-to-back (optional).
+    Parámetros nuevos v2.4:
+      blowout_ctx: contexto de blowout (BlowoutContext). Si se detecta victoria
+                   cómoda, se reducirá la confianza en AST/PRA de forwards.
     """
     recs = []
     b2b = b2b_teams or set()
@@ -138,15 +176,18 @@ def generate_prop_recommendations(
     home_roster_ids = set(home_positions.keys())
     away_roster_ids = set(away_positions.keys())
 
-    # Improvement 3: determine if defending team is on B2B (their defense is weaker)
+    # Determine if defending team is on B2B (their defense is weaker)
     home_on_b2b = home_team_id in b2b if home_team_id else False
     away_on_b2b = away_team_id in b2b if away_team_id else False
+
+    # Detectar hot scorers por equipo para ajuste de distribución ofensiva
+    home_hot = _detect_hot_scorers(home_players, home_positions)
+    away_hot = _detect_hot_scorers(away_players, away_positions)
 
     count = 0
     for p in away_players:
         if p["player_id"] not in away_roster_ids:
             continue
-        # Cross-validate team_id to prevent wrong-team players (e.g. stale cache)
         if away_team_id and p.get("team_id") and p["team_id"] != away_team_id:
             logger.warning(
                 f"Player {p['player_name']} team_id mismatch: "
@@ -154,11 +195,12 @@ def generate_prop_recommendations(
             )
             continue
         pos = _primary_position(away_positions.get(p["player_id"], "F"))
-        # Defending team for away players is the home team
         recs += _player_recs(
             p, away_team, pos, home_dvp.get(pos, {}),
             attacker_on_b2b=away_on_b2b,
             defender_on_b2b=home_on_b2b,
+            team_has_hot_scorer=bool(away_hot - {p["player_id"]}),
+            blowout_ctx=blowout_ctx,
         )
         count += 1
         if count >= 10:
@@ -168,7 +210,6 @@ def generate_prop_recommendations(
     for p in home_players:
         if p["player_id"] not in home_roster_ids:
             continue
-        # Cross-validate team_id to prevent wrong-team players (e.g. stale cache)
         if home_team_id and p.get("team_id") and p["team_id"] != home_team_id:
             logger.warning(
                 f"Player {p['player_name']} team_id mismatch: "
@@ -176,11 +217,12 @@ def generate_prop_recommendations(
             )
             continue
         pos = _primary_position(home_positions.get(p["player_id"], "F"))
-        # Defending team for home players is the away team
         recs += _player_recs(
             p, home_team, pos, away_dvp.get(pos, {}),
             attacker_on_b2b=home_on_b2b,
             defender_on_b2b=away_on_b2b,
+            team_has_hot_scorer=bool(home_hot - {p["player_id"]}),
+            blowout_ctx=blowout_ctx,
         )
         count += 1
         if count >= 10:
@@ -196,11 +238,15 @@ def _player_recs(
     dvp: dict,
     attacker_on_b2b: bool = False,
     defender_on_b2b: bool = False,
+    team_has_hot_scorer: bool = False,
+    blowout_ctx: "BlowoutContext | None" = None,
 ) -> list[dict]:
     """Genera recs para PTS/REB/AST/3PM/PRA/S+B de un jugador.
 
-    Improvement 3: attacker_on_b2b reduces confidence by 0.05;
-                   defender_on_b2b boosts dvp_factor by 1.08 (weaker defense).
+    v2.4 nuevos parámetros:
+      team_has_hot_scorer: hay un compañero de equipo en racha (L10 pts muy alta)
+                           → reduce projected de AST en forwards un 8%.
+      blowout_ctx:         contexto de blowout → penaliza AST/PRA de forwards.
     """
     recs = []
     league = LEAGUE_AVG_DVP.get(pos, LEAGUE_AVG_DVP["F"])
@@ -254,16 +300,32 @@ def _player_recs(
 
         dvp_factor = dvp_val / league_avg if league_avg > 0 else 1.0
 
-        # Improvement 3: defender on B2B → their defense is ~8% weaker
+        # Defender on B2B → their defense is ~8% weaker
         if defender_on_b2b:
             dvp_factor *= 1.08
 
         effective_l10 = l10_avg if l10_avg > 0 else season_avg
         projected = (effective_l10 * 0.6 + season_avg * 0.4) * dvp_factor
 
+        # ── Hot teammate: compañero en racha anotadora → reduce AST en F ──
+        # Si otro jugador del equipo está disparado (L10 pts muy por encima de
+        # su media), ese jugador acapara más el balón → forwards generan menos
+        # asistencias de las proyectadas.
+        hot_note = ""
+        if team_has_hot_scorer and stat_key in ("ast", "pra") and pos == "F":
+            projected = round(projected * (1.0 - _HOT_TEAMMATE_AST_REDUCTION), 2)
+            hot_note = " [🔥 Compañero hot]"
+
         threshold = _floor_half(projected * 0.80)
         if threshold < MIN_STAT[stat_key]:
             continue
+
+        # ── Umbrales estrictos para AST de forwards ──────────────────────
+        # Solo alta confianza si el forward tiene ≥27 MPG proyectados y
+        # el partido se proyecta cerrado (no blowout).
+        if stat_key == "ast" and pos == "F":
+            if mpg < _MIN_MPG_FORWARD_AST:
+                continue
 
         l10_for_conf = l10_avg if l10_avg > 0 else season_avg
         confidence = _compute_confidence(
@@ -271,10 +333,19 @@ def _player_recs(
         )
         if l10_avg == 0:
             confidence *= 0.85
-        # Improvement 3: attacker on B2B → reduce confidence by 0.05
+        # Attacker on B2B → reduce confidence by 0.05
         if attacker_on_b2b:
             confidence -= 0.05
-        if confidence < 0.45:
+
+        # ── Penalización por blowout (forwards AST/PRA) ───────────────────
+        if blowout_ctx is not None:
+            confidence = adjust_prop_confidence_for_blowout(
+                confidence, stat_key, pos, blowout_ctx
+            )
+
+        # ── Umbral mínimo de confianza: más estricto para AST de forwards ──
+        min_conf = _MIN_CONF_FORWARD_AST if (stat_key == "ast" and pos == "F") else 0.45
+        if confidence < min_conf:
             continue
 
         direction = "concede" if dvp_factor > 1.05 else ("restringe" if dvp_factor < 0.95 else "neutro en")
@@ -287,7 +358,7 @@ def _player_recs(
         reason = (
             f"Rival {direction} {(dvp_factor-1)*100:+.0f}% {stat_name} a su posición "
             f"(DvP {dvp_val:.1f} vs liga {league_avg:.1f}). "
-            f"Temp: {season_avg:.1f} | Últ10: {l10_text}{b2b_note}"
+            f"Temp: {season_avg:.1f} | Últ10: {l10_text}{b2b_note}{hot_note}"
         )
 
         recs.append({
