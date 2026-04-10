@@ -24,10 +24,10 @@ AGG_ODDS_HARD   = 8.00   # nunca superar
 
 # ── Límites v3.1 ──────────────────────────────────────────────
 MAX_STAKE_PER_PICK          = 2.5   # máximo stake por pick individual
-MAX_EXPOSURE_WARN           = 12.0  # aviso si exposición supera 12u (rango recomendado: 6-12u)
-MAX_EXPOSURE_HARD           = 15.0  # hard cap — nunca superar
+MAX_EXPOSURE_WARN           = 10.0  # aviso si exposición supera 10u (rango recomendado: 6-10u)
+MAX_EXPOSURE_HARD           = 12.0  # hard cap — nunca superar
 EV_MARKET_WARNING_THRESHOLD = 25.0  # EV > 25% → advertencia + stake reducido
-EV_SUSPICIOUS_THRESHOLD     = 40.0  # EV > 40% → Stake 0u, Sabiduría del Mercado > Modelo
+EV_SUSPICIOUS_THRESHOLD     = 35.0  # EV > 35% → Stake 0u, Sabiduría del Mercado > Modelo
 LARGE_SPREAD_THRESHOLD      = 15.0  # Spread >15 pts → garbage time risk en abril
 MAX_STAKE_LARGE_SPREAD      = 1.5   # Stake cap reducido para spreads masivos
 MAX_PICKS_SUMMARY           = 6    # máximo de picks en el Resumen Ejecutivo
@@ -779,6 +779,9 @@ class NBAFormatter:
 
             ml_bloqueado = partido_ml_bloqueado and b.selection in ("Home", "Away")
 
+            # ML No-Bet: cuota < 1.25 → payout tan bajo que no hay valor real
+            ml_no_bet = b.selection in ("Home", "Away") and b.odds < 1.25
+
             prob_pct = round(b.probability * 100, 1)
             ev_over_limit = b.ev_percent > EV_SUSPICIOUS_THRESHOLD
 
@@ -809,6 +812,7 @@ class NBAFormatter:
                 and b.probability >= MIN_PROB_THRESHOLD
                 and 1.0 <= b.ev_percent <= EV_SUSPICIOUS_THRESHOLD
                 and not ml_bloqueado
+                and not ml_no_bet               # ML No-Bet: odds < 1.25
                 and not ev_over_limit
                 and oficiales < MAX_PICKS_SUMMARY
                 and (MAX_EXPOSURE_HARD - total_stake) >= 0.5
@@ -875,6 +879,8 @@ class NBAFormatter:
                     )
                     # Marcar el análisis para excluirlo de combinadas
                     a.stake_zero_overheat = True
+                elif ml_no_bet:
+                    warn_str = f" 🚫 No Bet: ML cuota {b.odds:.2f} < 1.25 — payout sin valor real"
                 else:
                     warn_str = ""
                 lines.append(f"  Stake: 0u | Conf: Tendencia{warn_str}")

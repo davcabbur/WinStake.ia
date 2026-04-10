@@ -153,6 +153,30 @@ class Analyzer:
 
         # 3. Mejor apuesta
         best = self._ev_calc.find_best_bet(ev_results)
+
+        # ── ML priority: si el Spread del FAVORITO supera 12 pts ─────────
+        # En partidos muy desequilibrados, apostar el Spread del favorito es
+        # arriesgado (garbage time puede destruir el hándicap). Se prefiere el
+        # ML si está disponible con cuota ≥ 1.25; si no, No Bet.
+        _ML_PRIORITY_SPREAD_THRESHOLD = 12.0
+        if best and best.selection in ("Spread Home", "Spread Away") and best.line is not None:
+            if best.line < -_ML_PRIORITY_SPREAD_THRESHOLD:
+                fav_ml_sel = "Home" if best.selection == "Spread Home" else "Away"
+                fav_ml = next((r for r in ev_results if r.selection == fav_ml_sel), None)
+                if fav_ml and fav_ml.odds >= 1.25:
+                    logger.info(
+                        f"ML priority ({home_team} vs {away_team}): "
+                        f"{best.selection} line={best.line:.1f} → pivotando a ML {fav_ml_sel}"
+                    )
+                    best = fav_ml
+                else:
+                    # ML no disponible o cuota < 1.25 → No Bet
+                    logger.info(
+                        f"ML priority ({home_team} vs {away_team}): "
+                        f"Spread>12 pts pero ML <1.25 → No Bet"
+                    )
+                    best = None
+
         analysis.best_bet = best
 
         # 4. Kelly criterion
@@ -188,6 +212,19 @@ class Analyzer:
 
         return analysis
 
+    @staticmethod
+    def _team_motivation(win_pct: float) -> str:
+        """Clasifica la motivación del equipo en abril por win_pct."""
+        if win_pct is None:
+            return "—"
+        if win_pct >= 0.55:
+            return "🏆 Contender"
+        if win_pct >= 0.43:
+            return "🎯 Play-in Hunter"
+        if win_pct >= 0.35:
+            return "🔒 Locked"
+        return "💀 Tanking"
+
     def _generate_nba_insights(
         self,
         home_team: str,
@@ -219,17 +256,20 @@ class Analyzer:
                 better = home_team if home_wpct > away_wpct else away_team
                 insights.append(f"{better} es claramente superior en record de temporada")
 
-            # Filtro Abril: avisar si algún equipo está eliminado (falta incentivo defensivo)
+            # Clasificación motivacional + Filtro Abril
+            home_mot = self._team_motivation(home_wpct)
+            away_mot = self._team_motivation(away_wpct)
+            insights.append(f"📅 Motivación: {home_team} {home_mot} | {away_team} {away_mot}")
+
             _PLAYOFF_CUTOFF = 0.40
+            penalized = []
             if home_wpct is not None and home_wpct < _PLAYOFF_CUTOFF:
-                insights.append(
-                    f"📅 Filtro Abril: {home_team} eliminado de playoffs "
-                    f"(win_pct {home_wpct:.0%}) — defensa inflada +15%, total al alza"
-                )
+                penalized.append(f"{home_team} ({home_mot.split()[-1]}, win_pct {home_wpct:.0%})")
             if away_wpct is not None and away_wpct < _PLAYOFF_CUTOFF:
+                penalized.append(f"{away_team} ({away_mot.split()[-1]}, win_pct {away_wpct:.0%})")
+            if penalized:
                 insights.append(
-                    f"📅 Filtro Abril: {away_team} eliminado de playoffs "
-                    f"(win_pct {away_wpct:.0%}) — defensa inflada +15%, total al alza"
+                    f"⚠️ Defensa −15% aplicada: {', '.join(penalized)} — total al alza"
                 )
 
             # Pace

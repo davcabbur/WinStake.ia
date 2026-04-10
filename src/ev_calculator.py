@@ -209,9 +209,9 @@ class EVCalculator:
                 if odd > 4.0:
                     is_value = False
 
-                # 2. No recomendar favoritos aplastantes (odds < 1.20):
+                # 2. No recomendar favoritos aplastantes (odds < 1.25):
                 #    el payout es tan bajo que nunca hay valor real
-                elif odd < 1.20:
+                elif odd < 1.25:
                     is_value = False
 
                 # 3. Ratio de discrepancia: si el modelo es >2.0× más
