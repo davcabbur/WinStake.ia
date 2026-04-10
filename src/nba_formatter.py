@@ -28,6 +28,8 @@ MAX_EXPOSURE_WARN           = 12.0  # aviso si exposición supera 12u (rango rec
 MAX_EXPOSURE_HARD           = 15.0  # hard cap — nunca superar
 EV_MARKET_WARNING_THRESHOLD = 25.0  # EV > 25% → advertencia + stake reducido
 EV_SUSPICIOUS_THRESHOLD     = 40.0  # EV > 40% → Stake 0u, Sabiduría del Mercado > Modelo
+LARGE_SPREAD_THRESHOLD      = 15.0  # Spread >15 pts → garbage time risk en abril
+MAX_STAKE_LARGE_SPREAD      = 1.5   # Stake cap reducido para spreads masivos
 MAX_PICKS_SUMMARY           = 6    # máximo de picks en el Resumen Ejecutivo
 MAX_MONEYLINE_ODDS          = 2.50  # si CUALQUIER equipo supera esta cuota, ML bloqueado para el partido
 MIN_PROB_THRESHOLD          = 0.52  # probabilidad mínima del modelo para recomendar
@@ -820,6 +822,17 @@ class NBAFormatter:
                 if b.is_marginal and not b.is_value:
                     stake = min(stake, 1.0)
 
+                # ── Spread masivo (>15 pts): cap 1.5u por garbage time ──────
+                # En abril, los últimos 5 min de garbage time (suplentes vs
+                # suplentes) pueden destruir un hándicap de 18 pts sin aviso.
+                # Se detecta por el spread de mercado o el spread del modelo.
+                _mkt_spread = abs(getattr(p, "market_spread", 0) or 0)
+                _mdl_spread = abs(getattr(p, "spread", 0) or 0)
+                _game_spread = _mkt_spread if _mkt_spread > 0 else _mdl_spread
+                large_spread = _game_spread > LARGE_SPREAD_THRESHOLD
+                if large_spread:
+                    stake = min(stake, MAX_STAKE_LARGE_SPREAD)
+
                 remaining = MAX_EXPOSURE_HARD - total_stake
                 stake = max(min(stake, remaining), 0.5)
                 stake = round(stake, 1)
@@ -840,7 +853,11 @@ class NBAFormatter:
                     f"  {pick_desc} @ {b.odds:.2f} "
                     f"(Prob: {prob_pct}% | EV: {b.ev_percent:+.1f}%)"
                 )
-                lines.append(f"  Stake: {stake:.1f}u | Conf: {conf_label}")
+                spread_note = (
+                    f" ⚠️ Spread masivo ({_game_spread:.0f} pts) — garbage time risk"
+                    if large_spread else ""
+                )
+                lines.append(f"  Stake: {stake:.1f}u | Conf: {conf_label}{spread_note}")
             else:
                 # Tendencia: EV siempre en primera línea, warning inline con Stake
                 lines.append(
