@@ -639,7 +639,7 @@ def _build_match_keyboard(analyses: dict, sport: SportConfig) -> tuple[list, lis
 
     keyboard.append([InlineKeyboardButton("📊 Ver Resumen Ejecutivo", callback_data="summary")])
     if sport.sport_type == "basketball":
-        keyboard.append([InlineKeyboardButton("🎰 Combinada Recomendada", callback_data="parlay")])
+        keyboard.append([InlineKeyboardButton("🎯 Radar Props", callback_data="parlay")])
     return keyboard, sorted_analyses
 
 

@@ -1,17 +1,20 @@
 """
-WinStake.ia v2.4 — NBA Player Props & DvP Recommendations
-Genera recomendaciones diversificadas con al menos 5 categorías distintas:
-  PTS | REB | AST | 3PM | PRA | S+B
+WinStake.ia v3.2 — NBA Player Props & DvP Recommendations
+Genera recomendaciones de props estadísticamente aislados:
+  PTS | REB | AST | 3PM
 usando Defense vs Position (DvP) + últimos 10 partidos + media de temporada.
 
-Mejoras v2.4:
-  - Blowout & Garbage Time Adjuster: reduce confianza en AST/PRA de forwards
+Props compuestos (PRA, S+B) eliminados por alta varianza intrínseca.
+
+Mejoras v3.2:
+  - Blowout & Garbage Time Adjuster: reduce confianza en AST de forwards
     en victorias proyectadas cómodas.
   - Hot teammate weight: si un compañero de equipo está en racha anotadora
     (L10 pts ≥ 20% sobre media de temporada y >18 pts), se reduce la
     proyección de asistencias del forward del mismo equipo.
   - Umbrales estrictos para forwards: AST solo recomendada con ≥27 MPG
     proyectados y confianza mínima de 0.60.
+  - Confianza mínima global subida a 0.55 para filtrado más estricto.
 """
 
 import math
@@ -44,8 +47,6 @@ MIN_STAT = {
     "reb":   5.0,
     "ast":   4.0,
     "fg3m":  1.5,
-    "pra":  25.0,
-    "sb":    1.5,
 }
 
 # Umbral 3PM extra-alto para Centers (no tiradores naturales)
@@ -59,12 +60,10 @@ STAT_LABELS = {
     "reb":  ("REB",  "rebotes"),
     "ast":  ("AST",  "asistencias"),
     "fg3m": ("3PM",  "triples"),
-    "pra":  ("PRA",  "PTS+REB+AST"),
-    "sb":   ("S+B",  "robos+tapones"),
 }
 
 # Orden de prioridad para asegurar diversidad de categorías
-DIVERSITY_PRIORITY = ["pts", "reb", "ast", "pra", "sb", "fg3m"]
+DIVERSITY_PRIORITY = ["pts", "reb", "ast", "fg3m"]
 
 
 def _floor_half(x: float) -> float:
@@ -91,7 +90,7 @@ def _estimated_book_odds(confidence: float) -> float:
 
 def _ensure_diversity(recs: list, target_total: int = 12) -> list:
     """
-    Asegura que el top del ranking tenga al menos 6 categorías distintas
+    Asegura que el top del ranking tenga al menos 4 categorías distintas (PTS/REB/AST/3PM)
     y no más de 2 props del mismo jugador.
     Algoritmo:
       1. Para cada categoría en DIVERSITY_PRIORITY, elige el mejor rec disponible.
@@ -106,7 +105,7 @@ def _ensure_diversity(recs: list, target_total: int = 12) -> list:
 
     # Fase 1: una rep por categoría (máximo 6 distintas)
     for cat in DIVERSITY_PRIORITY:
-        if len(selected) >= min(6, len(DIVERSITY_PRIORITY)):
+        if len(selected) >= min(4, len(DIVERSITY_PRIORITY)):
             break
         for r in sorted_recs:
             key = (r["player"], r["stat_key"])
@@ -241,12 +240,12 @@ def _player_recs(
     team_has_hot_scorer: bool = False,
     blowout_ctx: "BlowoutContext | None" = None,
 ) -> list[dict]:
-    """Genera recs para PTS/REB/AST/3PM/PRA/S+B de un jugador.
+    """Genera recs para PTS/REB/AST/3PM de un jugador.
 
-    v2.4 nuevos parámetros:
+    Parámetros:
       team_has_hot_scorer: hay un compañero de equipo en racha (L10 pts muy alta)
                            → reduce projected de AST en forwards un 8%.
-      blowout_ctx:         contexto de blowout → penaliza AST/PRA de forwards.
+      blowout_ctx:         contexto de blowout → penaliza AST de forwards.
     """
     recs = []
     league = LEAGUE_AVG_DVP.get(pos, LEAGUE_AVG_DVP["F"])
@@ -256,17 +255,7 @@ def _player_recs(
         "reb":  (player.get("reb_season",  0), player.get("reb_l10",  0)),
         "ast":  (player.get("ast_season",  0), player.get("ast_l10",  0)),
         "fg3m": (player.get("fg3m_season", 0), player.get("fg3m_l10", 0)),
-        "stl":  (player.get("stl_season",  0), player.get("stl_l10",  0)),
-        "blk":  (player.get("blk_season",  0), player.get("blk_l10",  0)),
     }
-
-    pra_s = round(base["pts"][0] + base["reb"][0] + base["ast"][0], 1)
-    pra_l = round(base["pts"][1] + base["reb"][1] + base["ast"][1], 1)
-    base["pra"] = (pra_s, pra_l)
-
-    sb_s = round(base["stl"][0] + base["blk"][0], 1)
-    sb_l = round(base["stl"][1] + base["blk"][1], 1)
-    base["sb"] = (sb_s, sb_l)
 
     gp = player.get("gp_season", 0)
     mpg = player.get("mpg_season", 0.0)
@@ -288,15 +277,8 @@ def _player_recs(
         if gp < 10:
             continue
 
-        if stat_key == "pra":
-            dvp_val    = dvp.get("pts", league["pts"]) + dvp.get("reb", league["reb"]) + dvp.get("ast", league["ast"])
-            league_avg = league["pts"] + league["reb"] + league["ast"]
-        elif stat_key == "sb":
-            dvp_val    = dvp.get("stl", league["stl"]) + dvp.get("blk", league["blk"])
-            league_avg = league["stl"] + league["blk"]
-        else:
-            dvp_val    = dvp.get(stat_key, season_avg)
-            league_avg = league.get(stat_key, season_avg)
+        dvp_val    = dvp.get(stat_key, season_avg)
+        league_avg = league.get(stat_key, season_avg)
 
         dvp_factor = dvp_val / league_avg if league_avg > 0 else 1.0
 
@@ -312,7 +294,7 @@ def _player_recs(
         # su media), ese jugador acapara más el balón → forwards generan menos
         # asistencias de las proyectadas.
         hot_note = ""
-        if team_has_hot_scorer and stat_key in ("ast", "pra") and pos == "F":
+        if team_has_hot_scorer and stat_key == "ast" and pos == "F":
             projected = round(projected * (1.0 - _HOT_TEAMMATE_AST_REDUCTION), 2)
             hot_note = " [🔥 Compañero hot]"
 
@@ -344,7 +326,7 @@ def _player_recs(
             )
 
         # ── Umbral mínimo de confianza: más estricto para AST de forwards ──
-        min_conf = _MIN_CONF_FORWARD_AST if (stat_key == "ast" and pos == "F") else 0.45
+        min_conf = _MIN_CONF_FORWARD_AST if (stat_key == "ast" and pos == "F") else 0.55
         if confidence < min_conf:
             continue
 

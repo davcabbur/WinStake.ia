@@ -24,13 +24,12 @@ logger = logging.getLogger(__name__)
 VERSION = "v3.1"
 MODEL_TAG = "Normal Distribution + DvP | Kelly ½ | Blend modelo-mercado aplicado"
 
-# ── Límites de cuota combinada ────────────────────────────────
-SAFE_ODDS_MIN   = 1.85
-SAFE_ODDS_MAX   = 2.90
-SAFE_ODDS_HARD  = 3.00   # nunca superar en SAFE (drop legs si hace falta)
-AGG_ODDS_MIN    = 4.50
-AGG_ODDS_MAX    = 7.50
-AGG_ODDS_HARD   = 8.00   # nunca superar
+# ── Radar de Props Individuales — Umbrales v3.2 ────────────
+RADAR_MIN_CONFIDENCE = 0.55   # confianza mínima para recomendar
+RADAR_MIN_ODDS       = 1.70   # cuota estimada mínima
+RADAR_MAX_ODDS       = 2.10   # cuota estimada máxima
+RADAR_MAX_PER_PLAYER = 1      # máximo 1 prop por jugador
+RADAR_MAX_PROPS      = 8      # máximo 8 props en el output
 
 # ── Límites v3.1 ──────────────────────────────────────────────
 MAX_STAKE_PER_PICK          = 2.5   # máximo stake por pick individual
@@ -55,7 +54,7 @@ _PICK_TYPE: dict[str, str] = {
 }
 
 # Selecciones consideradas props — NUNCA van en el Resumen Ejecutivo
-_PROP_SELECTIONS = {"pts", "reb", "ast", "3pm", "sb", "pra", "fg3m", "blk", "stl"}
+_PROP_SELECTIONS = {"pts", "reb", "ast", "3pm", "fg3m"}
 
 
 def _round_line(line: float) -> float:
@@ -100,107 +99,28 @@ def _model_combined_prob(picks: list) -> float:
     return round(p * 100, 1)
 
 
-def _is_stake_zero(a) -> bool:
-    """
-    Devuelve True si el análisis tiene Stake 0u por cualquier motivo:
-    - stake_zero_overheat: EV > EV_SUSPICIOUS_THRESHOLD (protocolo Sabiduría del Mercado)
-    - best_bet con EV > EV_SUSPICIOUS_THRESHOLD (marcado en tiempo real)
-    Estos análisis quedan PROHIBIDOS en combinadas y correlated picks.
-    """
-    if getattr(a, "stake_zero_overheat", False):
-        return True
-    b = getattr(a, "best_bet", None)
-    if b is not None and b.ev_percent > EV_SUSPICIOUS_THRESHOLD:
-        return True
-    return False
-
-
-def _build_correlated_picks(analyses: list) -> list[str]:
-    """
-    Genera sugerencias de correlated picks.
-    Fuentes:
-      1. Resultado EV+ del mismo equipo + prop de ese equipo (más confiable).
-      2. Dos props del mismo partido con sinergia (ej. Over + alto anotador).
-      3. Cualquier resultado + el prop de mayor confianza del partido.
-    Devuelve al menos 3 sugerencias si hay datos suficientes.
-
-    PROHIBICIÓN: ningún análisis con Stake 0u por protocolo Sabiduría del Mercado
-    puede aparecer en combinadas (Feature 4 v3.2).
-    """
-    picks = []
-
-    for a in [x for x in analyses if not _is_stake_zero(x)]:
-        recs = getattr(a, "prop_recommendations", [])
-        bb = a.best_bet
-
-        # Tipo 1: resultado EV+ + mejor prop del mismo equipo
-        if bb and bb.is_value and recs:
-            sel = bb.selection
-            if sel in ("Home", "Spread Home"):
-                bet_team = a.home_team
-            elif sel in ("Away", "Spread Away"):
-                bet_team = a.away_team
-            else:
-                bet_team = None
-
-            if bet_team:
-                same = [r for r in recs if r["team"] == bet_team]
-                if same:
-                    top = same[0]
-                    o1, o2 = bb.odds, top.get("estimated_odds", 1.85)
-                    picks.append(
-                        f"<b>{sel} {bet_team}</b> @ {o1:.2f} + "
-                        f"<b>{top['player']} Over {top['threshold']} {top['stat_label']}</b> "
-                        f"@ ~{o2:.2f} → ~{round(o1*o2,2):.2f}x"
-                    )
-
-        # Tipo 2: top prop del partido + segundo prop del partido (distinto equipo o categoría)
-        if len(recs) >= 2:
-            r1, r2 = recs[0], recs[1]
-            # Solo si son de categorías distintas
-            if r1["stat_key"] != r2["stat_key"] or r1["team"] != r2["team"]:
-                o1, o2 = r1.get("estimated_odds", 1.85), r2.get("estimated_odds", 1.85)
-                picks.append(
-                    f"<b>{r1['player']} Over {r1['threshold']} {r1['stat_label']}</b> "
-                    f"@ ~{o1:.2f} + "
-                    f"<b>{r2['player']} Over {r2['threshold']} {r2['stat_label']}</b> "
-                    f"@ ~{o2:.2f} → ~{round(o1*o2,2):.2f}x"
-                    f" ({a.home_team} vs {a.away_team})"
-                )
-
-    # Tipo 3: fallback — si no llegamos a 3, añadir combinaciones cruzadas entre partidos
-    # Solo de análisis sin Stake 0u (Feature 4)
-    if len(picks) < 3:
-        all_top = []
-        for a in [x for x in analyses if not _is_stake_zero(x)]:
-            recs = getattr(a, "prop_recommendations", [])
-            if recs:
-                all_top.append((recs[0], f"{a.home_team} vs {a.away_team}"))
-        # Combinar pares de distintos partidos
-        for i in range(len(all_top)):
-            if len(picks) >= 5:
-                break
-            for j in range(i + 1, len(all_top)):
-                r1, m1 = all_top[i]
-                r2, m2 = all_top[j]
-                if m1 == m2:
-                    continue
-                o1, o2 = r1.get("estimated_odds", 1.85), r2.get("estimated_odds", 1.85)
-                picks.append(
-                    f"<b>{r1['player']} Over {r1['threshold']} {r1['stat_label']}</b> ({m1.split(' vs')[0]}) "
-                    f"@ ~{o1:.2f} + "
-                    f"<b>{r2['player']} Over {r2['threshold']} {r2['stat_label']}</b> ({m2.split(' vs')[0]}) "
-                    f"@ ~{o2:.2f} → ~{round(o1*o2,2):.2f}x"
-                )
-
-    # Deduplicar manteniendo orden
-    seen: set = set()
-    unique = []
-    for p in picks:
-        if p not in seen:
-            unique.append(p)
-            seen.add(p)
-    return unique[:5]
+def _filter_radar_props(all_props: list) -> list:
+    """Filtra props según umbrales de Radar v3.2."""
+    filtered = []
+    seen_players = set()
+    
+    # Ordenar por confianza descendente
+    sorted_props = sorted(all_props, key=lambda x: x.get("confidence_score", 0), reverse=True)
+    
+    for r in sorted_props:
+        if len(filtered) >= RADAR_MAX_PROPS:
+            break
+        if r["player"] in seen_players:
+            continue
+        
+        conf = r.get("confidence_score", 0)
+        odds = r.get("estimated_odds", 0)
+        
+        if conf >= RADAR_MIN_CONFIDENCE and RADAR_MIN_ODDS <= odds <= RADAR_MAX_ODDS:
+            filtered.append(r)
+            seen_players.add(r["player"])
+            
+    return filtered
 
 
 def _injury_impact_v26(status: str, ppg: float, pos: str) -> str:
@@ -483,12 +403,6 @@ class NBAFormatter:
                 lines.append(f"   <i>{r['reason']}</i>")
                 lines.append("")
 
-            # Correlated pick del partido
-            corr = _build_correlated_picks([a])
-            if corr:
-                lines.append(f"🔗 <b>Correlated:</b> {corr[0]}")
-                lines.append("")
-
         # 9. Claves del partido
         if a.insights:
             lines.append("<b>Claves</b>")
@@ -586,20 +500,22 @@ class NBAFormatter:
         legend = "\n\n<i>🔴 Out  🟠 Doubtful  🟡 Day-to-Day / Questionable</i>"
         return header + "".join(sections) + legend
 
-    # ── Combinada ─────────────────────────────────────────────
+    # ── Combinada → Radar de Props Individuales ────────────
 
     def format_parlay(self, analyses: list, roi_summary: dict = None) -> str:
         """
-        Formato v2.6:
-        🩹 Lesiones + impacto contextual | 🛡️ SAFE (1-2 legs, 1.85-2.90x)
-        💥 AGGRESSIVE (3 legs, 4.5-7.5x) | 🎯 Props (8-10, ≥6 cats) | 🔗 Correlated | Footer v2.6
+        RADAR DE PROPS INDIVIDUALES v3.2:
+        Solo props estadísticamente aislados (PTS/REB/AST/3PM).
+        Filtro estricto: confidence ≥55%, cuota 1.70-2.10, max 1/jugador, max 8 total.
+        Protocolo NO BET si no hay valor.
         """
         lines = []
-        lines.append("🎰 <b>COMBINADA RECOMENDADA — NBA</b>")
-        lines.append(f"📅 {datetime.now(_SPAIN_TZ).strftime('%d/%m/%Y %H:%M')} (España)\n")
+        lines.append("🎯 <b>RADAR DE PROPS INDIVIDUALES — NBA</b>")
+        lines.append(f"📅 {datetime.now(_SPAIN_TZ).strftime('%d/%m/%Y %H:%M')} (España)")
+        lines.append("<i>(Solo recomendaciones simples. No combinar sin gestión de riesgo).</i>")
+        lines.append("")
 
         # ── Sección de lesiones con impacto contextual ────────
-        # Recoger lesiones de ESPN (todas, no solo estrellas), ordenadas por PPG
         all_injuries_raw: list[dict] = []
         for a in analyses:
             injuries = getattr(a, "injuries", {})
@@ -607,7 +523,6 @@ class NBAFormatter:
             alerts = getattr(a, "injury_alerts", [])
 
             ppg_map: dict[str, float] = {}
-            pos_map: dict[str, str] = {}
             for side in ("home", "away"):
                 for p in props.get(side, []):
                     ppg_map[p["player_name"].lower()] = p.get("pts_season", 0.0)
@@ -647,7 +562,6 @@ class NBAFormatter:
                 ppg_str = f", {inj['ppg']:.0f} PPG" if inj["ppg"] >= 5.0 else ""
                 pos_str = f" ({inj['pos']})" if inj["pos"] else ""
                 detail_str = f" · {inj['detail']}" if inj.get("detail") else ""
-                # Impacto contextual
                 impact = _injury_impact_v26(inj["status"], inj["ppg"], inj.get("pos", ""))
                 lines.append(
                     f"   {icon} <b>{inj['player']}</b>{pos_str} ({inj['team']}{ppg_str})"
@@ -661,72 +575,55 @@ class NBAFormatter:
             )
         lines.append("")
 
-        # ── Recopilar datos ───────────────────────────────────
-        # Excluir picks con EV >40% (Protocolo Stake 0u / Sabiduría del Mercado)
-        # y picks marcados explícitamente con stake_zero_overheat.
-        value_bets = sorted(
-            [
-                (a, a.best_bet) for a in analyses
-                if a.best_bet and a.best_bet.is_value
-                and not _is_stake_zero(a)
-            ],
-            key=lambda x: x[1].ev_percent, reverse=True,
-        )
+        # ── Recopilar y filtrar props ───────────────────────
         all_props: list[dict] = []
         for a in analyses:
             for r in getattr(a, "prop_recommendations", []):
                 all_props.append({**r, "match": f"{a.home_team} vs {a.away_team}"})
-        all_props = _diversify_global_props(all_props, total=10)
 
-        # ── SAFE ─────────────────────────────────────────────
-        safe_picks = _build_safe_picks(value_bets, all_props)
-        lines += _format_safe_section(safe_picks)
+        filtered = _filter_radar_props(all_props)
 
-        # ── AGGRESSIVE ───────────────────────────────────────
-        agg_picks = _build_aggressive_picks(value_bets, all_props)
-        lines += _format_aggressive_section(agg_picks)
-
-        # ── Props Destacados (8-10, ≥6 categorías, max 2/jugador) ──
-        if all_props:
-            lines.append("🎯 <b>Props Destacados (DvP — ≥6 categorías)</b>")
-            for r in all_props[:10]:
+        # ── RADAR DE PROPS INDIVIDUALES ─────────────────────
+        if filtered:
+            lines.append("🎯 <b>RADAR DE PROPS INDIVIDUALES</b>")
+            lines.append("")
+            for r in filtered:
                 conf_pct = int(r["confidence_score"] * 100)
                 est_odds = r.get("estimated_odds", 1.85)
+                projected = r["projected"]
+                threshold = r["threshold"]
+                margin = round(projected - threshold, 1)
+                ev_pct = round((r["confidence_score"] * est_odds - 1) * 100, 1)
+                dvp_check = "✅" if r["dvp_factor"] > 1.05 else ("➖" if r["dvp_factor"] >= 0.95 else "❌")
+
                 lines.append(
-                    f"{_conf_icon(r['confidence_score'])} <b>{r['player']}</b> "
-                    f"({r.get('pos','?')}) — "
-                    f"Over {r['threshold']} {r['stat_label']} @ ~{est_odds:.2f} [{conf_pct}%]"
+                    f"🔥 <b>{r['player']}</b> ({r.get('pos','?')}) — "
+                    f"Over {r['threshold']} {r['stat_label']} @ ~{est_odds:.2f} (est.)"
                 )
                 lines.append(
-                    f"   {_dvp_icon(r['dvp_factor'])} {r['match']} | "
-                    f"Temp: {r['season_avg']:.1f} | Últ10: {_l10(r)}"
+                    f"   {_dvp_icon(r['dvp_factor'])} {r['match']}"
                 )
+                lines.append(
+                    f"   📊 Prob: {conf_pct}% | EV: {ev_pct:+.1f}% | "
+                    f"Margen: +{margin:.1f} (Proy: {projected:.1f} vs Línea: {threshold:.1f})"
+                )
+                l10_display = _l10(r)
+                lines.append(
+                    f"   💡 Temp: {r['season_avg']:.1f} | Últ10: {l10_display} | DvP Check: {dvp_check}"
+                )
+                lines.append("")
+        else:
+            # Protocolo NO BET
+            lines.append("⛔️ Sin props con valor suficiente hoy. Protege tu bankroll.")
             lines.append("")
 
-        # ── Correlated Picks (3-5) ────────────────────────────
-        corr_picks = _build_correlated_picks(analyses)
-        if corr_picks:
-            lines.append("🔗 <b>Correlated Picks Sugeridos</b>")
-            for cp in corr_picks[:5]:
-                lines.append(f"   • {cp}")
-            lines.append("")
-        elif not corr_picks and all_props:
-            # Fallback: combinar los 2 mejores props de distintos partidos
-            lines.append("🔗 <b>Correlated Picks Sugeridos</b>")
-            lines.append("   • Sin correlaciones resultado+prop hoy. Ver Props Destacados arriba.")
-            lines.append("")
-
-        if not value_bets and not all_props:
-            lines.append("❌ No hay picks con valor suficiente hoy.")
-
-        # ── Footer v2.9 ───────────────────────────────────────
+        # ── Footer v3.2 ───────────────────────────────────────
         roi_str = _roi_str(roi_summary)
         lines.append("─" * 32)
         lines.append("⚠️ <i>Cuotas estimadas. Verifica siempre en tu casa de apuestas.</i>")
-        lines.append("⚠️ <i>Las lesiones pueden cambiar el value drásticamente. Revisa reportes oficiales.</i>")
         lines.append(
             f"<i>🤖 WinStake.ia {VERSION} | Normal Distribution + DvP | "
-            f"Kelly ½ | EV = (prob × cuota) − 1 | Blend modelo-mercado aplicado | "
+            f"Confidence ≥55% | Cuota 1.70-2.10 | "
             f"Último ROI: {roi_str} (/roi)</i>"
         )
         return "\n".join(lines)
@@ -989,274 +886,52 @@ class NBAFormatter:
 
 
 # ─────────────────────────────────────────────────────────────
-# Helpers de combinada
+# Helpers de Radar de Props
 # ─────────────────────────────────────────────────────────────
 
-PRIORITY_CATS = ["pts", "reb", "ast", "pra", "sb", "fg3m"]
+# Categorías permitidas (solo props estadísticamente aislados)
+RADAR_ALLOWED_CATS = {"pts", "reb", "ast", "fg3m"}
 
 
-def _diversify_global_props(props: list, total: int = 10) -> list:
-    """Garantiza ≥6 categorías distintas en el top y max 2 props por jugador."""
-    sorted_p = sorted(props, key=lambda x: x["confidence_score"], reverse=True)
-    # Improvement 10: use (player, stat_key) tuple instead of id() for deduplication
-    used_keys: set = set()
-    player_count: dict = {}
+def _filter_radar_props(props: list) -> list:
+    """
+    Filtra props para el Radar de Props Individuales.
+    Reglas estrictas:
+      - Solo categorías PTS/REB/AST/3PM (no PRA, no S+B)
+      - Confidence >= RADAR_MIN_CONFIDENCE (55%)
+      - Cuota estimada entre RADAR_MIN_ODDS (1.70) y RADAR_MAX_ODDS (2.10)
+      - Máximo 1 prop por jugador
+      - Máximo 8 props total
+      - Ordenados por confidence_score descendente
+    """
+    # Paso 1: filtrar por categoría, confianza y cuota
+    valid = []
+    for r in props:
+        if r.get("stat_key") not in RADAR_ALLOWED_CATS:
+            continue
+        if r.get("confidence_score", 0) < RADAR_MIN_CONFIDENCE:
+            continue
+        odds = r.get("estimated_odds", 0)
+        if odds < RADAR_MIN_ODDS or odds > RADAR_MAX_ODDS:
+            continue
+        valid.append(r)
+
+    # Paso 2: ordenar por confianza descendente
+    valid.sort(key=lambda x: x["confidence_score"], reverse=True)
+
+    # Paso 3: máximo 1 prop por jugador
     selected: list = []
-
-    # Fase 1: una rep por categoría prioritaria (mínimo 6)
-    for cat in PRIORITY_CATS:
-        if len(selected) >= 6:
+    seen_players: set = set()
+    for r in valid:
+        player = r["player"]
+        if player in seen_players:
+            continue
+        seen_players.add(player)
+        selected.append(r)
+        if len(selected) >= RADAR_MAX_PROPS:
             break
-        for r in sorted_p:
-            key = (r["player"], r["stat_key"])
-            if key not in used_keys and r["stat_key"] == cat:
-                pname = r["player"]
-                if player_count.get(pname, 0) < 2:
-                    selected.append(r)
-                    used_keys.add(key)
-                    player_count[pname] = player_count.get(pname, 0) + 1
-                    break
 
-    # Fase 2: rellenar hasta total (max 2 por jugador)
-    for r in sorted_p:
-        if len(selected) >= total:
-            break
-        key = (r["player"], r["stat_key"])
-        if key not in used_keys:
-            pname = r["player"]
-            if player_count.get(pname, 0) < 2:
-                selected.append(r)
-                used_keys.add(key)
-                player_count[pname] = player_count.get(pname, 0) + 1
-
-    return sorted(selected, key=lambda x: x["confidence_score"], reverse=True)
-
-
-def _build_safe_picks(value_bets: list, all_props: list) -> list[dict]:
-    """
-    Construye 1-2 picks SAFE (cuota combinada 1.85x-2.90x).
-    - Solo result bets con cuota individual 1.50-2.20 (favoritos limpios).
-    - Si 2 legs superan 2.90x combinado, usa solo 1 (Single Pick SAFE).
-    - Completa con props de alta confianza si no hay result bets.
-    """
-    candidates = []
-
-    for a, b in value_bets:
-        # Solo favoritos o ligeramente underdogs — cuotas muy altas elevan combinada
-        if b.odds < 1.50 or b.odds > 2.20:
-            continue
-        # SAFE requiere prob ≥65% — picks más seguros únicamente
-        if b.probability < 0.65:
-            continue
-        conf_icon = {"Alta": "🟢", "Media": "🟡", "Baja": "🔴"}.get(a.confidence, "⚪")
-        candidates.append({
-            "label": f"{b.selection} ({a.home_team} vs {a.away_team})",
-            "odds": b.odds,
-            "model_prob": b.probability,
-            "ev_pct": b.ev_percent,
-            "conf_icon": conf_icon,
-            "type": "resultado",
-            "single": False,
-        })
-
-    # Completar con props de alta confianza (≥0.65) si faltan legs
-    for r in all_props:
-        if len(candidates) >= 2:
-            break
-        if r["confidence_score"] < 0.65:
-            continue
-        odds = r.get("estimated_odds", 1.85)
-        candidates.append({
-            "label": f"{r['player']} ({r.get('pos','?')}) Over {r['threshold']} {r['stat_label']} ({r['match']})",
-            "odds": odds,
-            "model_prob": r["confidence_score"],
-            "ev_pct": None,
-            "conf_icon": _conf_icon(r["confidence_score"]),
-            "type": "prop",
-            "single": False,
-        })
-
-    if not candidates:
-        return []
-
-    # Intentar 2 legs dentro del rango; si supera SAFE_ODDS_HARD → bajar a 1
-    two = candidates[:2]
-    if len(two) == 2 and _combined_odds(two) <= SAFE_ODDS_HARD:
-        return two
-    # Single Pick SAFE
-    best = candidates[:1]
-    best[0]["single"] = True
-    return best
-
-
-def _combined_odds(picks: list) -> float:
-    total = 1.0
-    for p in picks:
-        total *= p["odds"]
-    return round(total, 2)
-
-
-def _trim_to_hard_cap(picks: list, cap: float) -> list:
-    """Elimina el pick de menor confianza hasta que la cuota combinada ≤ cap."""
-    p = list(picks)
-    while len(p) > 1 and _combined_odds(p) > cap:
-        # Quitar el de menor model_prob
-        p.sort(key=lambda x: x.get("model_prob", 0), reverse=True)
-        p = p[:-1]
-    return p
-
-
-def _format_safe_section(picks: list) -> list[str]:
-    if not picks:
-        return []
-
-    is_single = picks[0].get("single", False) or len(picks) == 1
-    co = _combined_odds(picks)
-    model_prob = _model_combined_prob(picks)
-
-    label_tag = "Single Pick SAFE ⚠️ escasez de picks conservadores" if is_single else "2 legs"
-    lines = [f"🛡️ <b>SAFE ({label_tag}) — Bajo riesgo | Cuota objetivo 1.85x-2.90x</b>"]
-
-    for i, p in enumerate(picks, 1):
-        ev_str = ""
-        if p.get("ev_pct") is not None:
-            ev_str = f" | EV: {p['ev_pct']:+.1f}%"
-            if p["ev_pct"] > EV_MARKET_WARNING_THRESHOLD:
-                ev_str += " ⚠️ <i>Alta discrepancia con mercado</i>"
-        odds_str = f"@ {p['odds']:.2f}" if p["type"] == "resultado" else f"@ ~{p['odds']:.2f} (est.)"
-        lines.append(f"   {i}. <b>{p['label']}</b> {odds_str} {p['conf_icon']}{ev_str}")
-
-    has_props = any(p["type"] == "prop" for p in picks)
-    odds_display = f"~{co:.2f}x" if has_props else f"{co:.2f}x"
-
-    range_note = ""
-    if co < SAFE_ODDS_MIN:
-        range_note = " ⚠️ cuota baja"
-    elif co > SAFE_ODDS_MAX:
-        range_note = " ⚠️ cuota en límite superior"
-
-    lines.append(
-        f"   <b>Cuota combinada: {odds_display}</b>{range_note} | "
-        f"Prob. estimada modelo: {model_prob:.0f}% | Stake: 2.0u"
-    )
-    if has_props:
-        lines.append("   ⚠️ <i>Cuotas de props estimadas. Confirma en tu casa.</i>")
-    lines.append("")
-    return lines
-
-
-def _build_aggressive_picks(value_bets: list, all_props: list) -> list[dict]:
-    """
-    Construye exactamente 3 picks AGGRESSIVE (cuota objetivo 4.5-7.5x).
-    Mezcla resultado EV+ + props de distintos partidos.
-    Máximo 3 legs — nunca más.
-    """
-    picks = []
-    used_matches: set = set()
-
-    # Primer leg: mejor result bet con prob ≥55%
-    for a, b in value_bets:
-        if b.probability < 0.55:
-            continue
-        mk = f"{a.home_team}_{a.away_team}"
-        used_matches.add(mk)
-        conf_icon = {"Alta": "🟢", "Media": "🟡", "Baja": "🔴"}.get(a.confidence, "⚪")
-        picks.append({
-            "label": f"{b.selection} ({a.home_team} vs {a.away_team})",
-            "odds": b.odds,
-            "model_prob": b.probability,
-            "ev_pct": b.ev_percent,
-            "conf_icon": conf_icon,
-            "type": "resultado",
-        })
-        break  # Solo el mejor leg de resultado
-
-    # Legs adicionales: props de partidos distintos, diversificando categorías
-    used_cats: set = set()
-    for r in all_props:
-        if len(picks) >= 3:   # tope estricto en 3
-            break
-        home, away = r["match"].split(" vs ", 1)
-        mk = f"{home}_{away}"
-        if mk in used_matches:
-            continue
-        # Preferir categorías no usadas aún
-        if r["stat_key"] in used_cats and len(picks) >= 2:
-            continue
-        used_matches.add(mk)
-        used_cats.add(r["stat_key"])
-        odds = r.get("estimated_odds", 1.85)
-        picks.append({
-            "label": f"{r['player']} Over {r['threshold']} {r['stat_label']} ({r['match']})",
-            "odds": odds,
-            "model_prob": r["confidence_score"],
-            "ev_pct": None,
-            "conf_icon": _conf_icon(r["confidence_score"]),
-            "type": "prop",
-            "conf_pct": int(r["confidence_score"] * 100),
-        })
-
-    # Si aún no llegamos a 3, añadir props del mismo partido
-    # Improvement 10: use (player, stat_key) tuple instead of id() for deduplication
-    if len(picks) < 3:
-        used_prop_keys = {(p.get("player", p["label"]), p.get("stat_key", "")) for p in picks}
-        for r in all_props:
-            if len(picks) >= 3:
-                break
-            rkey = (r["player"], r["stat_key"])
-            if rkey not in used_prop_keys:
-                used_prop_keys.add(rkey)
-                odds = r.get("estimated_odds", 1.85)
-                picks.append({
-                    "label": f"{r['player']} Over {r['threshold']} {r['stat_label']} ({r['match']})",
-                    "odds": odds,
-                    "model_prob": r["confidence_score"],
-                    "ev_pct": None,
-                    "conf_icon": _conf_icon(r["confidence_score"]),
-                    "type": "prop",
-                    "conf_pct": int(r["confidence_score"] * 100),
-                    "player": r["player"],
-                    "stat_key": r["stat_key"],
-                })
-
-    return picks[:3]  # garantía final: nunca más de 3
-
-
-def _format_aggressive_section(picks: list) -> list[str]:
-    if len(picks) < 2:
-        return []
-
-    # Aplicar hard cap (nunca >9x): quitar el menos confiable si es necesario
-    picks = _trim_to_hard_cap(picks, AGG_ODDS_HARD)
-    co = _combined_odds(picks)
-    model_prob = _model_combined_prob(picks)
-    n = len(picks)
-
-    range_note = ""
-    if co < AGG_ODDS_MIN:
-        range_note = " ⚠️ cuota bajo objetivo"
-    elif co > AGG_ODDS_MAX:
-        range_note = " ⚠️ cuota alta, stake mínimo"
-
-    lines = [f"💥 <b>AGGRESSIVE ({n} legs) — Riesgo medio | Cuota objetivo 4.5x-7.5x</b>"]
-    for i, p in enumerate(picks, 1):
-        if p["type"] == "prop":
-            conf_str = f" [{p.get('conf_pct', 0)}%]"
-            lines.append(f"   {i}. {p['label']} @ ~{p['odds']:.2f} (est.){conf_str}")
-        else:
-            ev_str = ""
-            if p.get("ev_pct") is not None:
-                ev_str = f" | EV: {p['ev_pct']:+.1f}%"
-                if p["ev_pct"] > EV_MARKET_WARNING_THRESHOLD:
-                    ev_str += " ⚠️ <i>Alta discrepancia con mercado</i>"
-            lines.append(f"   {i}. <b>{p['label']}</b> @ {p['odds']:.2f} {p['conf_icon']}{ev_str}")
-
-    lines.append(
-        f"   <b>Cuota combinada: ~{co:.2f}x</b>{range_note} | "
-        f"Prob. estimada modelo: {model_prob:.0f}% | Stake: 0.6u"
-    )
-    lines.append("")
-    return lines
+    return selected
 
 
 def _roi_str(roi_summary: dict | None) -> str:
@@ -1266,3 +941,4 @@ def _roi_str(roi_summary: dict | None) -> str:
     n = roi_summary.get("total_bets", 0)
     sign = "+" if roi >= 0 else ""
     return f"{sign}{roi:.1f}% en {n} picks"
+
