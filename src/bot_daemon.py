@@ -31,6 +31,7 @@ from src.normal_model import NormalModel as _NormalModel
 from src.ev_calculator import EVResult
 from src.logger_config import setup_logging
 from src.database import DB_PATH
+from src.lineup_monitor import LineupMonitor, format_lineup_update
 
 logger = setup_logging("WinStakeBot")
 
@@ -521,10 +522,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Comandos disponibles:\n"
         "⚽ /laliga — Analizar la próxima jornada de La Liga\n"
         "🏀 /nba — Analizar los próximos partidos NBA\n"
+        "📋 /onces — Ver onces oficiales y pronóstico actualizado\n"
         "🔹 /analizar — Analizar La Liga (default)\n"
         "🔹 /roi — Consultar tu Bankroll y ROI histórico\n"
         "🔹 /ping — Verificar estado del motor\n\n"
-        "Pulsa un comando de deporte para empezar."
+        "El bot envía automáticamente los onces cuando se confirman (~60 min antes del partido)."
     )
     await update.message.reply_html(msg)
 
@@ -754,6 +756,97 @@ async def match_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 
+async def _lineup_monitor_task(app):
+    """
+    Tarea de fondo: comprueba onces oficiales cada 10 minutos.
+
+    Cuando API-Football confirma los titulares de un partido de La Liga
+    (normalmente ~60 min antes del pitido), re-analiza el pronóstico y
+    envía el update al canal de Telegram y a todos los chats con análisis activo.
+    """
+    monitor = LineupMonitor()
+    CHECK_INTERVAL = 10 * 60  # 10 minutos
+
+    while True:
+        try:
+            loop = asyncio.get_running_loop()
+            updates = await loop.run_in_executor(None, monitor.check_and_process)
+
+            for upd in updates:
+                msg = format_lineup_update(upd)
+
+                # Enviar al canal principal
+                if config.TELEGRAM_CHAT_ID:
+                    try:
+                        for chunk in _split_message(msg):
+                            await app.bot.send_message(
+                                chat_id=config.TELEGRAM_CHAT_ID,
+                                text=chunk,
+                                parse_mode=ParseMode.HTML,
+                                disable_web_page_preview=True,
+                            )
+                    except Exception as e:
+                        logger.error(f"Error enviando update de onces al canal: {e}")
+
+                # Enviar también a los chats que tienen análisis activo de La Liga
+                for chat_id, cache in _jornada_cache.items():
+                    if cache.get("sport") and cache["sport"].key != "laliga":
+                        continue
+                    if str(chat_id) == config.TELEGRAM_CHAT_ID:
+                        continue  # ya enviado arriba
+                    try:
+                        for chunk in _split_message(msg):
+                            await app.bot.send_message(
+                                chat_id=chat_id,
+                                text=chunk,
+                                parse_mode=ParseMode.HTML,
+                                disable_web_page_preview=True,
+                            )
+                    except Exception as e:
+                        logger.error(f"Error enviando update de onces a chat {chat_id}: {e}")
+
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"Error en tarea de onces: {e}", exc_info=True)
+
+        await asyncio.sleep(CHECK_INTERVAL)
+
+
+async def onces_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /onces — Comprueba manualmente si ya están publicados los onces de hoy.
+    Si están disponibles, muestra el análisis actualizado con los titulares.
+    """
+    await update.message.reply_text("⏳ Consultando onces oficiales de La Liga...")
+
+    try:
+        monitor = LineupMonitor()
+        loop = asyncio.get_running_loop()
+        updates = await loop.run_in_executor(None, monitor.check_and_process)
+
+        if not updates:
+            await update.message.reply_html(
+                "ℹ️ Todavía no hay onces confirmados para los próximos partidos de La Liga.\n"
+                "Los titulares suelen publicarse ~60 minutos antes del partido."
+            )
+            return
+
+        for upd in updates:
+            msg = format_lineup_update(upd)
+            for chunk in _split_message(msg):
+                try:
+                    await update.message.reply_html(chunk, disable_web_page_preview=True)
+                except Exception:
+                    await update.message.reply_text(
+                        _strip_html(chunk), disable_web_page_preview=True
+                    )
+
+    except Exception as e:
+        logger.error(f"Error en /onces: {e}", exc_info=True)
+        await update.message.reply_text("❌ Error consultando onces. Revisa los logs.")
+
+
 async def _daily_backtesting_task():
     """
     Improvement 7: Daily background task that runs backtesting at 10:00 AM.
@@ -827,15 +920,18 @@ def main():
     application.add_handler(CommandHandler("analizar", analizar_command))
     application.add_handler(CommandHandler("laliga", laliga_command))
     application.add_handler(CommandHandler("nba", nba_command))
+    application.add_handler(CommandHandler("onces", onces_command))
 
     # Callbacks de botones inline
     application.add_handler(CallbackQueryHandler(match_callback))
 
     logger.info("🚀 WinStake.ia Bot Daemon iniciado. Escuchando comandos de Telegram...")
 
-    # Improvement 7: start daily backtesting background task
+    # Tareas de fondo: backtesting diario + monitor de onces
     async def post_init(app):
         asyncio.create_task(_daily_backtesting_task())
+        asyncio.create_task(_lineup_monitor_task(app))
+        logger.info("🔄 Monitor de onces activo — verificando cada 10 min")
 
     application.post_init = post_init
     application.run_polling(allowed_updates=Update.ALL_TYPES)

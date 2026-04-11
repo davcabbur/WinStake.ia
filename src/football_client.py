@@ -326,6 +326,106 @@ class FootballClient:
             "away": away_players[:3],
         }
 
+    def get_today_fixtures(self) -> list[dict]:
+        """
+        Obtiene los fixtures de La Liga programados para hoy.
+        Usado para mapear partidos a fixture_id y luego pedir onces.
+        """
+        if self._mock_mode:
+            return []
+
+        from datetime import date
+        today = date.today().isoformat()
+
+        cache_key = f"today_fixtures_{today}"
+        cached = self.cache.get(cache_key, 60 * 60)  # 1 hora — fixtures del día no cambian
+        if cached is not None:
+            return cached
+
+        data = self._request("fixtures", {
+            "league": config.LA_LIGA_ID,
+            "season": config.CURRENT_SEASON,
+            "date": today,
+        })
+        if not data:
+            return []
+
+        try:
+            result = [
+                {
+                    "fixture_id": f["fixture"]["id"],
+                    "home_team": f["teams"]["home"]["name"],
+                    "away_team": f["teams"]["away"]["name"],
+                    "status": f["fixture"]["status"]["short"],  # NS, 1H, HT, 2H, FT…
+                    "date": f["fixture"]["date"],
+                }
+                for f in data.get("response", [])
+            ]
+            self.cache.set(cache_key, result)
+            logger.info(f"📅 {len(result)} fixture(s) de La Liga hoy")
+            return result
+        except (KeyError, TypeError) as e:
+            logger.error(f"❌ Error parseando fixtures de hoy: {e}")
+            return []
+
+    def get_fixture_lineups(self, fixture_id: int) -> Optional[dict]:
+        """
+        Obtiene las alineaciones oficiales de un fixture.
+        Retorna None si todavía no están publicadas (pre-partido).
+        La respuesta incluye startXI, suplentes, formación y entrenador.
+        """
+        if self._mock_mode:
+            return None
+
+        # Cache corto (5 min) — los onces pueden llegar en cualquier momento
+        cache_key = f"lineups_{fixture_id}"
+        cached = self.cache.get(cache_key, 5 * 60)
+        if cached is not None:
+            return cached
+
+        data = self._request("fixtures/lineups", {"fixture": fixture_id})
+        if not data:
+            return None
+
+        response = data.get("response", [])
+        if len(response) < 2:
+            return None  # Onces aún no publicados
+
+        try:
+            def _parse_side(side_data: dict) -> dict:
+                return {
+                    "team": side_data["team"]["name"],
+                    "formation": side_data.get("formation", ""),
+                    "coach": side_data.get("coach", {}).get("name", ""),
+                    "startXI": [
+                        {
+                            "name": p["player"]["name"],
+                            "number": p["player"].get("number"),
+                            "pos": p["player"].get("pos", ""),
+                        }
+                        for p in side_data.get("startXI", [])
+                    ],
+                    "substitutes": [
+                        p["player"]["name"]
+                        for p in side_data.get("substitutes", [])
+                    ],
+                }
+
+            result = {
+                "home": _parse_side(response[0]),
+                "away": _parse_side(response[1]),
+            }
+
+            # Solo cachear si el once está completo (11 jugadores)
+            if len(result["home"]["startXI"]) >= 11 and len(result["away"]["startXI"]) >= 11:
+                self.cache.set(cache_key, result)
+                logger.info(f"📋 Onces confirmados para fixture {fixture_id}")
+
+            return result
+        except (KeyError, TypeError, IndexError) as e:
+            logger.error(f"❌ Error parseando lineups fixture {fixture_id}: {e}")
+            return None
+
     def find_team_in_standings(self, team_name: str, standings: list[dict]) -> Optional[dict]:
         """Busca un equipo en la clasificación por nombre (fuzzy match)."""
         name_lower = team_name.lower()

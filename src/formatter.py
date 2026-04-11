@@ -29,8 +29,6 @@ class Formatter:
             msg = self._format_match(analysis)
             messages.append(msg)
 
-        summary = self._format_summary(analyses)
-        messages.append(summary)
         return messages
 
     def format_single_match(self, a: MatchAnalysis) -> str:
@@ -168,40 +166,8 @@ class Formatter:
             )
             lines.append("")
 
-        # ── 10. Análisis de Valor (EV) ──
-        lines.append("<b>10. Análisis de Valor (EV)</b>")
-        # Agrupar por categoría
-        categories = {
-            "1X2": ["Local", "Empate", "Visitante"],
-            "Doble Oport.": ["1X", "X2", "12"],
-            "Over/Under": ["Over 1.5", "Under 1.5", "Over 2.5", "Under 2.5", "Over 3.5", "Under 3.5"],
-            "BTTS": ["BTTS Sí", "BTTS No"],
-        }
-        for cat_name, selections in categories.items():
-            cat_evs = [ev for ev in a.ev_results if ev.selection in selections]
-            if cat_evs:
-                ev_strs = []
-                for ev in cat_evs:
-                    icon = "✅" if ev.is_value else "❌"
-                    ev_strs.append(f"{icon}{ev.selection}: {ev.ev_percent:+.1f}%")
-                lines.append(f"   <b>{cat_name}:</b> {' | '.join(ev_strs)}")
-        lines.append("")
-
-        # ── 11. Mejor Apuesta ──
-        lines.append("<b>🎯 MEJOR APUESTA</b>")
-        if a.best_bet and a.best_bet.is_value:
-            confidence_icon = {"Alta": "🟢", "Media": "🟡", "Baja": "🔴"}.get(a.confidence, "⚪")
-            ev_icon = "🔥" if a.best_bet.ev_percent >= 15 else ("🟢" if a.best_bet.ev_percent >= 5 else "✅")
-
-            lines.append(f"   📌 Selección: <b>{a.best_bet.selection}</b>")
-            lines.append(f"   💰 Cuota: {a.best_bet.odds:.2f}")
-            lines.append(f"   {ev_icon} EV: {a.best_bet.ev_percent:+.1f}%")
-            lines.append(f"   {confidence_icon} Confianza: {a.confidence}")
-
-            if a.kelly:
-                lines.append(f"   📊 Stake: {a.kelly.stake_units:.1f}u (Half-Kelly {a.kelly.kelly_half:.1f}%) | Riesgo: {a.kelly.risk_level}")
-        else:
-            lines.append("   ❌ <b>No apostar</b> — Sin EV positivo suficiente")
+        # ── 10. Picks por nivel de riesgo ──
+        lines.extend(self._format_picks_by_risk(a))
         lines.append("")
 
         # ── 12. Claves ──
@@ -213,44 +179,58 @@ class Formatter:
         lines.append(f"\n{'━' * 30}")
         return "\n".join(lines)
 
-    def _format_summary(self, analyses: list[MatchAnalysis]) -> str:
-        """Genera resumen ejecutivo con las mejores apuestas."""
+    # Grupos de riesgo: (etiqueta, cuota_min_incluida, cuota_max_excluida)
+    _RISK_GROUPS = [
+        ("🟢 SAFE",             1.80, 3.20),
+        ("🟡 ARRIESGADA/SAFE",  3.20, 6.00),
+        ("🔴 ARRIESGADA",       6.00, 999.0),
+    ]
+    _MAX_PICKS_PER_GROUP = 4
+
+    def _format_picks_by_risk(self, a: MatchAnalysis) -> list[str]:
+        """Genera picks del partido agrupados por nivel de riesgo (cuota)."""
         lines = []
-        lines.append("\n🎯 <b>RESUMEN EJECUTIVO</b>\n")
+        lines.append("<b>🎯 PICKS POR NIVEL DE RIESGO</b>")
 
-        value_bets = [a for a in analyses if a.best_bet and a.best_bet.is_value]
-        no_bets = [a for a in analyses if not a.best_bet or not a.best_bet.is_value]
+        # Solo picks con cuota real disponible (la cuota proviene del mercado)
+        candidates = [
+            ev for ev in a.ev_results
+            if ev.odds and ev.odds > 1.0
+        ]
 
-        if value_bets:
-            lines.append("<b>✅ Apuestas recomendadas:</b>\n")
-            value_bets.sort(key=lambda x: x.best_bet.ev_percent, reverse=True)
+        any_group_has_picks = False
+        for label, lo, hi in self._RISK_GROUPS:
+            group = [ev for ev in candidates if lo <= ev.odds < hi]
+            # Ordenar: primero los de mayor EV%
+            group.sort(key=lambda x: x.ev_percent, reverse=True)
+            group = group[:self._MAX_PICKS_PER_GROUP]
 
-            total_stake = 0
-            for a in value_bets:
-                b = a.best_bet
-                confidence_icon = {"Alta": "🟢", "Media": "🟡", "Baja": "🔴"}.get(a.confidence, "⚪")
-                ev_icon = "🔥" if b.ev_percent >= 15 else ("🟢" if b.ev_percent >= 5 else "✅")
-                stake = a.kelly.stake_units if a.kelly else 0
-                total_stake += stake
-                lines.append(f"• <b>{a.home_team} vs {a.away_team}</b>")
-                lines.append(f"  {ev_icon} {b.selection} @ {b.odds:.2f} (EV: {b.ev_percent:+.1f}%)")
-                lines.append(f"  {confidence_icon} Stake: {stake:.1f}u | Conf: {a.confidence}")
-                lines.append("")
+            range_str = f"{lo:.2f}–{hi:.2f}" if hi < 900 else f">{lo:.2f}"
+            lines.append(f"\n   <b>{label}</b>  (cuota {range_str})")
 
-            lines.append(f"\n💼 Exposición total: {total_stake:.1f} unidades / {self._bankroll_units()}")
-        else:
-            lines.append("❌ No se encontraron apuestas con valor esta jornada.")
+            if not group:
+                lines.append("   — Sin picks disponibles en este rango")
+                continue
 
-        if no_bets:
-            lines.append(f"\n⛔ No apostar ({len(no_bets)} partidos):")
-            for a in no_bets:
-                lines.append(f"   • {a.home_team} vs {a.away_team}")
+            any_group_has_picks = True
+            for ev in group:
+                if ev.is_value:
+                    ev_icon = "✅"
+                elif ev.is_marginal:
+                    ev_icon = "🟡"
+                elif ev.ev_percent >= 0:
+                    ev_icon = "⚪"
+                else:
+                    ev_icon = "❌"
+                lines.append(
+                    f"   {ev_icon} <b>{ev.selection}</b> @ {ev.odds:.2f} "
+                    f"— Prob: {ev.probability * 100:.0f}%  EV: {ev.ev_percent:+.1f}%"
+                )
 
-        lines.append(f"\n{'━' * 30}")
-        lines.append("\n⚠️ <i>Disclaimer: Análisis informativo. Apuesta responsable.</i>")
-        lines.append("🤖 <i>Generado por WinStake.ia</i>")
+        if not any_group_has_picks:
+            lines.append("\n   ⚠️ No hay cuotas de mercado disponibles para este partido")
 
-        return "\n".join(lines)
+        return lines
 
     @staticmethod
     def _bankroll_units() -> str:
