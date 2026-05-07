@@ -120,33 +120,57 @@ class Database:
                 );
             """)
 
-            # Migración: añadir columna sport si no existe (para BD antiguas y nuevas)
-            self._migrate_add_sport_column(conn)
+            # Migraciones idempotentes (sport, line, paper trading…)
+            self._run_migrations(conn)
             # Poblar settings por defecto si la tabla está vacía
             self._seed_default_settings(conn)
             conn.commit()
             logger.info(f"✅ Base de datos inicializada en {self.db_path}")
 
     @staticmethod
-    def _migrate_add_sport_column(conn: sqlite3.Connection):
-        """Migración: añadir columna sport a tablas existentes sin ella."""
-        migrated = False
-        for table in ("analyses", "value_bets"):
+    def _run_migrations(conn: sqlite3.Connection):
+        """
+        Migraciones idempotentes sobre BDs existentes.
+
+        Cada migración comprueba si la columna existe (PRAGMA table_info) y la
+        añade si no. Seguro de re-ejecutar — al re-instanciar Database() sobre
+        un archivo ya migrado no se hace ningún ALTER.
+        """
+        def _add_column_if_missing(table: str, column: str, ddl: str) -> bool:
             cols = [row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()]
-            if "sport" not in cols:
-                conn.execute(f"ALTER TABLE {table} ADD COLUMN sport TEXT NOT NULL DEFAULT 'laliga'")
-                logger.info(f"📦 Migración: columna 'sport' añadida a {table}")
-                migrated = True
+            if column in cols:
+                return False
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
+            logger.info(f"📦 Migración: columna '{column}' añadida a {table}")
+            return True
 
-        vb_cols = [row[1] for row in conn.execute("PRAGMA table_info(value_bets)").fetchall()]
-        if "line" not in vb_cols:
-            conn.execute("ALTER TABLE value_bets ADD COLUMN line REAL")
-            logger.info("📦 Migración: columna 'line' añadida a value_bets")
-            migrated = True
+        migrated = False
 
-        # Crear índices de sport (idempotente)
+        # ── Multi-deporte ────────────────────────────────────
+        for table in ("analyses", "value_bets"):
+            migrated |= _add_column_if_missing(
+                table, "sport", "sport TEXT NOT NULL DEFAULT 'laliga'"
+            )
+
+        # ── Línea de apuesta (spread/total NBA) ──────────────
+        migrated |= _add_column_if_missing("value_bets", "line", "line REAL")
+
+        # ── Paper trading: snapshot de pick + settle ─────────
+        migrated |= _add_column_if_missing("value_bets", "bookmaker",    "bookmaker TEXT")
+        migrated |= _add_column_if_missing("value_bets", "odds_at_pick", "odds_at_pick REAL")
+        migrated |= _add_column_if_missing("value_bets", "closing_odds", "closing_odds REAL")
+        migrated |= _add_column_if_missing("value_bets", "is_paper",     "is_paper INTEGER NOT NULL DEFAULT 1")
+        migrated |= _add_column_if_missing("value_bets", "created_at",   "created_at TEXT")
+        migrated |= _add_column_if_missing("value_bets", "settled_at",   "settled_at TEXT")
+        migrated |= _add_column_if_missing("value_bets", "result",       "result TEXT")
+        migrated |= _add_column_if_missing("value_bets", "pnl_units",    "pnl_units REAL")
+
+        # Índices (idempotentes)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_analyses_sport ON analyses(sport)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_value_bets_sport ON value_bets(sport)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_value_bets_paper ON value_bets(is_paper)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_value_bets_result ON value_bets(result)")
+
         if migrated:
             conn.commit()
 

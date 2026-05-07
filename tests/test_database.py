@@ -65,6 +65,28 @@ def test_database_initialization(mock_db):
     assert "match_results" in tables
 
 
+def test_migrations_idempotent(tmp_path):
+    """Re-instanciar Database sobre la misma BD no duplica columnas ni falla."""
+    import sqlite3
+
+    path = str(tmp_path / "winstake_migrations.sqlite")
+    Database(db_path=path)
+    Database(db_path=path)
+    Database(db_path=path)
+
+    conn = sqlite3.connect(path)
+    cols = [row[1] for row in conn.execute("PRAGMA table_info(value_bets)").fetchall()]
+    conn.close()
+
+    expected = (
+        "sport", "line",
+        "bookmaker", "odds_at_pick", "closing_odds", "is_paper",
+        "created_at", "settled_at", "result", "pnl_units",
+    )
+    for col in expected:
+        assert cols.count(col) == 1, f"Columna {col} duplicada o ausente: {cols}"
+
+
 def test_foreign_keys_enabled(mock_db):
     """PRAGMA foreign_keys debe estar ON."""
     with mock_db._get_conn() as conn:
