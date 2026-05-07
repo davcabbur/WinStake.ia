@@ -55,11 +55,10 @@ def _make_analysis(home="Team A", away="Team B", has_value=True) -> MatchAnalysi
 
 def test_database_initialization(mock_db):
     """Las tablas se crean correctamente."""
-    conn = mock_db._get_conn()
-    cursor = conn.cursor()
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-    tables = [row[0] for row in cursor.fetchall()]
-    conn.close()
+    with mock_db._get_conn() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = [row[0] for row in cursor.fetchall()]
 
     assert "analyses" in tables
     assert "value_bets" in tables
@@ -68,9 +67,8 @@ def test_database_initialization(mock_db):
 
 def test_foreign_keys_enabled(mock_db):
     """PRAGMA foreign_keys debe estar ON."""
-    conn = mock_db._get_conn()
-    result = conn.execute("PRAGMA foreign_keys").fetchone()
-    conn.close()
+    with mock_db._get_conn() as conn:
+        result = conn.execute("PRAGMA foreign_keys").fetchone()
     assert result[0] == 1
 
 
@@ -83,15 +81,14 @@ def test_save_analysis_with_value_bet(mock_db):
 
     assert analysis_id > 0
 
-    conn = mock_db._get_conn()
-    row = conn.execute("SELECT * FROM analyses WHERE id = ?", (analysis_id,)).fetchone()
-    assert row["home_team"] == "Team A"
-    assert row["away_team"] == "Team B"
+    with mock_db._get_conn() as conn:
+        row = conn.execute("SELECT * FROM analyses WHERE id = ?", (analysis_id,)).fetchone()
+        assert row["home_team"] == "Team A"
+        assert row["away_team"] == "Team B"
 
-    vb = conn.execute("SELECT * FROM value_bets WHERE analysis_id = ?", (analysis_id,)).fetchone()
-    assert vb["selection"] == "Local"
-    assert vb["odds"] == 1.85
-    conn.close()
+        vb = conn.execute("SELECT * FROM value_bets WHERE analysis_id = ?", (analysis_id,)).fetchone()
+        assert vb["selection"] == "Local"
+        assert vb["odds"] == 1.85
 
 
 def test_save_analysis_without_value_bet(mock_db):
@@ -99,10 +96,9 @@ def test_save_analysis_without_value_bet(mock_db):
     analysis = _make_analysis(has_value=False)
     analysis_id = mock_db.save_analysis(analysis)
 
-    conn = mock_db._get_conn()
-    vb = conn.execute("SELECT * FROM value_bets WHERE analysis_id = ?", (analysis_id,)).fetchone()
+    with mock_db._get_conn() as conn:
+        vb = conn.execute("SELECT * FROM value_bets WHERE analysis_id = ?", (analysis_id,)).fetchone()
     assert vb is None
-    conn.close()
 
 
 # ── ROI Summary ───────────────────────────────────────────
@@ -120,9 +116,8 @@ def test_roi_summary_with_results(mock_db):
     mock_db.save_analysis(analysis)
 
     # Registrar resultado: apuesta ganada
-    conn = mock_db._get_conn()
-    vb_id = conn.execute("SELECT id FROM value_bets").fetchone()[0]
-    conn.close()
+    with mock_db._get_conn() as conn:
+        vb_id = conn.execute("SELECT id FROM value_bets").fetchone()[0]
 
     profit = mock_db.record_result(vb_id, home_goals=2, away_goals=1)
     assert profit > 0  # Local ganó
@@ -140,9 +135,8 @@ def test_record_result_win(mock_db):
     analysis = _make_analysis()
     mock_db.save_analysis(analysis)
 
-    conn = mock_db._get_conn()
-    vb = conn.execute("SELECT id, odds, stake_units FROM value_bets").fetchone()
-    conn.close()
+    with mock_db._get_conn() as conn:
+        vb = conn.execute("SELECT id, odds, stake_units FROM value_bets").fetchone()
 
     profit = mock_db.record_result(vb["id"], home_goals=3, away_goals=1)
     expected = vb["stake_units"] * (vb["odds"] - 1)
@@ -154,9 +148,8 @@ def test_record_result_loss(mock_db):
     analysis = _make_analysis()
     mock_db.save_analysis(analysis)
 
-    conn = mock_db._get_conn()
-    vb_id = conn.execute("SELECT id FROM value_bets").fetchone()[0]
-    conn.close()
+    with mock_db._get_conn() as conn:
+        vb_id = conn.execute("SELECT id FROM value_bets").fetchone()[0]
 
     profit = mock_db.record_result(vb_id, home_goals=0, away_goals=2)
     assert profit < 0
@@ -214,9 +207,8 @@ def test_pending_results_cleared_after_recording(mock_db):
     analysis = _make_analysis()
     mock_db.save_analysis(analysis)
 
-    conn = mock_db._get_conn()
-    vb_id = conn.execute("SELECT id FROM value_bets").fetchone()[0]
-    conn.close()
+    with mock_db._get_conn() as conn:
+        vb_id = conn.execute("SELECT id FROM value_bets").fetchone()[0]
 
     mock_db.record_result(vb_id, home_goals=1, away_goals=0)
 
