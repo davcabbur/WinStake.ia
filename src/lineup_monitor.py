@@ -63,6 +63,61 @@ class LineupMonitor:
 
     # ── API pública ──────────────────────────────────────────────────────────
 
+    def get_lineup_for_match(
+        self,
+        match: dict,
+        standings: list[dict],
+        scorers: list[dict],
+        today_fixtures: list[dict],
+    ) -> tuple[Optional[dict], str]:
+        """
+        Consulta los onces de UN partido concreto y devuelve el update + estado.
+
+        Usado desde _run_analysis_for_jornada para enriquecer cada análisis
+        individualmente sin pasar por el filtro de ventana de tiempo del monitor
+        de fondo (que solo mira los próximos 90 min).
+
+        Returns:
+            (update_dict, status) donde status es:
+            "adjusted"   — onces publicados, análisis ajustado devuelto
+            "pending"    — partido en ventana (< 90 min) pero onces aún no publicados
+            "no_fixture" — fixture no encontrado en API-Football (nombres distintos)
+            "far"        — partido fuera de la ventana de monitoreo
+        """
+        now = datetime.now(timezone.utc)
+        ct  = match.get("commence_time", "")
+        try:
+            match_dt = datetime.fromisoformat(ct.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            return None, "far"
+
+        window_end = now + timedelta(minutes=LINEUP_WINDOW_MINS)
+        cutoff     = now + timedelta(minutes=LINEUP_STOP_MINS)
+
+        if not (cutoff <= match_dt <= window_end):
+            return None, "far"
+
+        fixture = self._find_fixture(match["home_team"], match["away_team"], today_fixtures)
+        if not fixture:
+            return None, "no_fixture"
+
+        lineups = self._football_client.get_fixture_lineups(fixture["fixture_id"])
+        if not lineups:
+            return None, "pending"
+
+        home_xi = lineups["home"]["startXI"]
+        away_xi = lineups["away"]["startXI"]
+        if len(home_xi) < 11 or len(away_xi) < 11:
+            return None, "pending"
+
+        update = self._build_update(
+            match=match,
+            lineups=lineups,
+            scorers=scorers,
+            standings=standings,
+        )
+        return update, "adjusted"
+
     def check_and_process(self) -> list[dict]:
         """
         Comprueba onces para partidos dentro de la ventana de tiempo.

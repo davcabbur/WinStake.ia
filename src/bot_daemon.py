@@ -285,10 +285,14 @@ def _apply_injury_impact(analysis, home_players: list, away_players: list, impor
         )
 
 
-def _run_analysis_for_jornada(sport_config: SportConfig = None) -> dict:
+def _run_analysis_for_jornada(sport_config: SportConfig = None) -> tuple[dict, dict]:
     """
-    Ejecuta el análisis completo de la jornada y devuelve un dict
-    {match_id: MatchAnalysis} con todos los partidos.
+    Ejecuta el análisis completo de la jornada.
+
+    Returns:
+        (analyses, lineup_updates)
+        analyses       — {match_id: MatchAnalysis}  (ya ajustado con onces si aplica)
+        lineup_updates — {match_id: {"status": str, "data": dict|None}}
     """
     sc = sport_config or LALIGA
     odds_client = OddsClient(sport_config=sc)
@@ -351,6 +355,29 @@ def _run_analysis_for_jornada(sport_config: SportConfig = None) -> dict:
             scorers=match_scorers,
         )
         analyses[match_id] = analysis
+
+    # 5b. La Liga — enriquecimiento con onces oficiales (si el partido es < 90 min)
+    lineup_updates: dict[str, dict] = {}
+    if sc.sport_type == "football":
+        try:
+            monitor = LineupMonitor()
+            today_fixtures = stats_client.get_today_fixtures()
+            for match in matches_odds:
+                mid  = match.get("id", f"{match['home_team']}_{match['away_team']}")
+                upd, status = monitor.get_lineup_for_match(
+                    match, standings, scorers, today_fixtures
+                )
+                lineup_updates[mid] = {"status": status, "data": upd}
+                if status == "adjusted" and upd:
+                    # Reemplazar el análisis base por el ajustado con onces
+                    analyses[mid] = upd["adjusted"]
+                    logger.info(
+                        f"📋 Onces integrados en análisis: "
+                        f"{match['home_team']} vs {match['away_team']} "
+                        f"| EV delta={upd['ev_delta']:+.1%}"
+                    )
+        except Exception as e:
+            logger.warning(f"⚠️ Error en enriquecimiento de onces: {e}", exc_info=True)
 
     # 6. NBA — Player props, DvP, últimos 10, lesiones
     if sc.sport_type == "basketball":
@@ -507,7 +534,7 @@ def _run_analysis_for_jornada(sport_config: SportConfig = None) -> dict:
     for analysis in analyses.values():
         db.save_analysis(analysis, sport=sc.key)
 
-    return analyses
+    return analyses, lineup_updates
 
 
 # ── Almacenamiento en memoria por chat ──────────────────────
@@ -566,7 +593,7 @@ async def _analizar_sport(update: Update, context: ContextTypes.DEFAULT_TYPE, sp
 
     try:
         loop = asyncio.get_running_loop()
-        analyses = await loop.run_in_executor(
+        analyses, lineup_updates = await loop.run_in_executor(
             None, lambda: _run_analysis_for_jornada(sport)
         )
 
@@ -575,20 +602,34 @@ async def _analizar_sport(update: Update, context: ContextTypes.DEFAULT_TYPE, sp
             return
 
         # Construir teclado inline (devuelve también la lista ordenada)
-        keyboard, sorted_matches = _build_match_keyboard(analyses, sport)
+        keyboard, sorted_matches = _build_match_keyboard(analyses, sport, lineup_updates)
 
         # Guardar en caché para este chat
-        _jornada_cache[chat_id] = {"analyses": analyses, "sport": sport, "sorted_matches": sorted_matches}
+        _jornada_cache[chat_id] = {
+            "analyses": analyses,
+            "sport": sport,
+            "sorted_matches": sorted_matches,
+            "lineup_updates": lineup_updates,
+        }
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        n_total = len(analyses)
-        n_value = sum(1 for a in analyses.values() if a.best_bet and a.best_bet.is_value)
+        n_total    = len(analyses)
+        n_value    = sum(1 for a in analyses.values() if a.best_bet and a.best_bet.is_value)
+        n_onces    = sum(1 for v in lineup_updates.values() if v["status"] == "adjusted")
+        n_pending  = sum(1 for v in lineup_updates.values() if v["status"] == "pending")
+
+        onces_line = ""
+        if n_onces:
+            onces_line = f"\n📋 {n_onces} partido(s) con onces oficiales integrados"
+        elif n_pending:
+            onces_line = f"\n⏳ {n_pending} partido(s) a la espera de onces"
 
         header = (
             f"🏆 <b>WINSTAKE.IA — {sport.name.upper()}</b>\n"
             f"📅 {datetime.now().strftime('%d/%m/%Y %H:%M')}\n"
             f"{sport.emoji} {n_total} partidos analizados\n"
-            f"🎯 {n_value} con valor detectado\n\n"
+            f"🎯 {n_value} con valor detectado"
+            f"{onces_line}\n\n"
             f"Pulsa un partido para ver su análisis completo:"
         )
 
@@ -609,22 +650,41 @@ async def _analizar_sport(update: Update, context: ContextTypes.DEFAULT_TYPE, sp
         await update.message.reply_text("❌ Hubo un error ejecutando el análisis. Revisa los logs.")
 
 
-def _build_match_keyboard(analyses: dict, sport: SportConfig) -> tuple[list, list]:
+def _build_match_keyboard(
+    analyses: dict,
+    sport: SportConfig,
+    lineup_updates: dict | None = None,
+) -> tuple[list, list]:
     """Construye teclado inline con botones de partidos.
 
     Devuelve (keyboard, sorted_matches) donde sorted_matches es la lista
     ordenada usada para que los índices del callback coincidan.
+
+    Iconos de estado de onces (solo La Liga):
+      📋 — onces oficiales integrados en el análisis
+      ⏳ — partido próximo, onces aún no publicados
     """
     keyboard = []
     sorted_analyses = sorted(analyses.values(), key=lambda a: a.commence_time or "")
+    lu = lineup_updates or {}
 
     for i, a in enumerate(sorted_analyses):
+        # Icono principal: valor detectado vs deporte
         if a.best_bet and a.best_bet.is_value:
             icon = "✅"
             ev_text = f" | EV: {a.best_bet.ev_percent:+.1f}%"
         else:
             icon = sport.emoji
             ev_text = ""
+
+        # Indicador de onces (solo para fútbol)
+        lineup_status = lu.get(a.match_id, {}).get("status", "far")
+        if lineup_status == "adjusted":
+            lineup_tag = " 📋"
+        elif lineup_status == "pending":
+            lineup_tag = " ⏳"
+        else:
+            lineup_tag = ""
 
         date_str = ""
         if a.commence_time:
@@ -634,8 +694,8 @@ def _build_match_keyboard(analyses: dict, sport: SportConfig) -> tuple[list, lis
             except (ValueError, AttributeError):
                 pass
 
-        button_text = f"{icon} {a.home_team} vs {a.away_team}{date_str}{ev_text}"
-        callback_data = f"match:{i}"  # índice numérico, siempre < 64 bytes
+        button_text = f"{icon} {a.home_team} vs {a.away_team}{date_str}{lineup_tag}{ev_text}"
+        callback_data = f"match:{i}"
 
         keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
 
@@ -699,23 +759,52 @@ async def match_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         analysis = sorted_matches[idx]
-        msg = formatter.format_single_match(analysis)
+        lineup_updates = cache.get("lineup_updates", {})
+        lineup_info    = lineup_updates.get(analysis.match_id, {})
+        lineup_status  = lineup_info.get("status", "far")
+        lineup_data    = lineup_info.get("data")
 
         back_button = InlineKeyboardMarkup([
             [InlineKeyboardButton("⬅️ Volver a la jornada", callback_data="back_to_jornada")]
         ])
 
-        chunks = _split_message(msg)
-        for i, chunk in enumerate(chunks):
-            reply_markup = back_button if i == len(chunks) - 1 else None
-            try:
-                await query.message.reply_html(
-                    chunk, disable_web_page_preview=True, reply_markup=reply_markup,
-                )
-            except Exception:
-                await query.message.reply_text(
-                    _strip_html(chunk), disable_web_page_preview=True, reply_markup=reply_markup,
-                )
+        async def _send_chunks(text: str, last_markup=None):
+            chunks = _split_message(text)
+            for i, chunk in enumerate(chunks):
+                markup = last_markup if i == len(chunks) - 1 else None
+                try:
+                    await query.message.reply_html(
+                        chunk, disable_web_page_preview=True, reply_markup=markup,
+                    )
+                except Exception:
+                    await query.message.reply_text(
+                        _strip_html(chunk), disable_web_page_preview=True, reply_markup=markup,
+                    )
+
+        # ── Partidos con onces confirmados ────────────────────────────────────
+        if lineup_status == "adjusted" and lineup_data:
+            # 1. Bloque de onces: lineup + señal EV 🟢/🔴
+            lineup_msg = format_lineup_update(lineup_data)
+            await _send_chunks(lineup_msg)
+
+            # 2. Análisis completo (ya ajustado con onces en el objeto analysis)
+            main_msg = formatter.format_single_match(analysis)
+            await _send_chunks(main_msg, last_markup=back_button)
+
+        # ── Partido próximo pero onces aún sin publicar ───────────────────────
+        elif lineup_status == "pending":
+            main_msg = formatter.format_single_match(analysis)
+            main_msg += (
+                "\n\n⏳ <i>Onces oficiales aún no publicados — el análisis se actualizará "
+                "automáticamente cuando Simeone/el cuerpo técnico los confirme.</i>"
+            )
+            await _send_chunks(main_msg, last_markup=back_button)
+
+        # ── Partido lejano o sin fixture — análisis estándar ─────────────────
+        else:
+            main_msg = formatter.format_single_match(analysis)
+            await _send_chunks(main_msg, last_markup=back_button)
+
         return
 
     if data == "parlay":
@@ -739,7 +828,7 @@ async def match_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "back_to_jornada":
-        keyboard, _ = _build_match_keyboard(analyses, sport)
+        keyboard, _ = _build_match_keyboard(analyses, sport, cache.get("lineup_updates"))
 
         n_total = len(analyses)
         n_value = sum(1 for a in analyses.values() if a.best_bet and a.best_bet.is_value)

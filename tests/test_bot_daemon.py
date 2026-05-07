@@ -65,8 +65,8 @@ async def test_roi_command_with_data(mock_db_class):
 @pytest.mark.asyncio
 @patch("src.bot_daemon._run_analysis_for_jornada")
 async def test_analizar_sport_no_matches(mock_run):
-    # Simula que _run_analysis.. retorna un dict vacio
-    mock_run.return_value = {}
+    # Simula que _run_analysis.. retorna (analyses, lineup_updates) vacíos
+    mock_run.return_value = ({}, {})
     
     update = MagicMock()
     update.message = AsyncMock()
@@ -95,7 +95,7 @@ async def test_analizar_sport_with_matches(mock_run):
     analysis_mock.match_id = "test_match"
     
     # 1 partido en los resultados funcionales
-    mock_run.return_value = {"test_match": analysis_mock}
+    mock_run.return_value = ({"test_match": analysis_mock}, {})
     
     update = MagicMock()
     update.message = AsyncMock()
