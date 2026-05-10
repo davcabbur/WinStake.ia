@@ -50,6 +50,23 @@ module.exports = {
       time: true,
     },
     {
+      name: 'winstake-settle',
+      script: pythonExe,
+      args: path.join('src', 'settle_daemon.py'),
+      cwd: projectDir,
+      interpreter: 'none',
+      autorestart: true,
+      watch: false,
+      max_memory_restart: '200M',
+      env: {
+        PYTHONUNBUFFERED: '1',
+        PYTHONUTF8: '1',
+      },
+      log_file: path.join(projectDir, 'logs', 'settle.log'),
+      error_file: path.join(projectDir, 'logs', 'settle.error.log'),
+      time: true,
+    },
+    {
       name: 'winstake-frontend',
       script: 'cmd',
       args: '/c npm start',

@@ -46,7 +46,6 @@ def _fetch_game_result_from_nba_api(home_team: str, away_team: str, game_date: s
         from nba_api.stats.endpoints import leaguegamefinder
         from nba_api.stats.static import teams as nba_teams
 
-        # Find team IDs
         all_teams = nba_teams.get_teams()
 
         def find_team_id(name: str) -> Optional[int]:
@@ -63,7 +62,6 @@ def _fetch_game_result_from_nba_api(home_team: str, away_team: str, game_date: s
             logger.warning(f"No team ID found for: {home_team}")
             return None
 
-        # Search games for home team around the game date
         try:
             date_from = (datetime.strptime(game_date[:10], "%Y-%m-%d") - timedelta(days=1)).strftime("%m/%d/%Y")
             date_to = (datetime.strptime(game_date[:10], "%Y-%m-%d") + timedelta(days=1)).strftime("%m/%d/%Y")
@@ -83,8 +81,7 @@ def _fetch_game_result_from_nba_api(home_team: str, away_team: str, game_date: s
             logger.info(f"No games found for {home_team} around {game_date}")
             return None
 
-        # Find the away team match
-        away_low = away_team.lower().split()[-1]  # use last word (team nickname)
+        away_low = away_team.lower().split()[-1]
         for _, row in df.iterrows():
             matchup = str(row.get("MATCHUP", ""))
             if away_low in matchup.lower() or "vs." in matchup:
@@ -173,7 +170,6 @@ def run_backtesting_check(db_path: str) -> dict:
 
         cutoff = (datetime.now() - timedelta(hours=24)).isoformat()
 
-        # Find NBA value bets with no result recorded, from >24h ago
         pending = conn.execute("""
             SELECT
                 vb.id as bet_id,
@@ -206,7 +202,6 @@ def run_backtesting_check(db_path: str) -> dict:
             stake = row["stake_units"]
             line = row["line"]
 
-            # Try to fetch actual result
             result_data = _fetch_game_result_from_nba_api(home_team, away_team, commence_time)
             if not result_data:
                 skipped += 1
@@ -240,7 +235,6 @@ def run_backtesting_check(db_path: str) -> dict:
                 now_str,
             ))
 
-            # Update result column on value_bets
             conn.execute(
                 "UPDATE value_bets SET result = ? WHERE id = ?",
                 (result, bet_id)
