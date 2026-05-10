@@ -54,6 +54,13 @@ class MatchAnalysis:
     blowout_context: object = None                        # BlowoutContext (NBA only)
     quarter_projections: list = field(default_factory=list)  # Q1-Q4 proyecciones (NBA only)
     stake_zero_overheat: bool = False                     # EV >40%: Stake 0u por Sabiduría de Mercado
+    # Mapa market_key → bookmaker (de chosen_book_meta). None cuando se usa
+    # avg_odds — la convención del fallback se resuelve en save_analysis.
+    bookmaker_meta: Optional[dict] = None
+    # Cuotas crudas de Bet365 propagadas desde el match (match["bet365_odds"]).
+    # Se usan en save_analysis para resolver el bookmaker en modo legacy
+    # (USE_RAW_ODDS=0): si Bet365 cubrió un mercado, avg_odds usa esa cuota.
+    bet365_odds: Optional[dict] = None
 
 
 class Analyzer:
@@ -102,17 +109,23 @@ class Analyzer:
         h2h_data: Optional[list] = None,
         match_id: str = "",
         scorers: Optional[dict] = None,
+        bookmaker_meta: Optional[dict] = None,
+        bet365_odds: Optional[dict] = None,
     ) -> MatchAnalysis:
         """Análisis completo de un partido. Enruta al modelo correcto."""
         if self.sport_type == "basketball":
-            return self._analyze_match_nba(
+            analysis = self._analyze_match_nba(
                 home_team, away_team, odds, home_stats, away_stats,
                 commence_time, h2h_data, match_id,
             )
-        return self._analyze_match_football(
-            home_team, away_team, odds, home_stats, away_stats,
-            commence_time, h2h_data, match_id, scorers,
-        )
+        else:
+            analysis = self._analyze_match_football(
+                home_team, away_team, odds, home_stats, away_stats,
+                commence_time, h2h_data, match_id, scorers,
+            )
+        analysis.bookmaker_meta = bookmaker_meta
+        analysis.bet365_odds    = bet365_odds
+        return analysis
 
     def _analyze_match_nba(
         self,

@@ -24,6 +24,10 @@ class EVResult:
     is_value: bool = False       # EV >= MIN_EV_THRESHOLD (3%) — pick de valor pleno
     is_marginal: bool = False    # EV >= MARGINAL_EV_THRESHOLD (1%) y < 3% — valor marginal
     line: Optional[float] = None
+    # market_key: clave canónica del mercado en el dict odds (ej: "home",
+    # "over_25", "spread_home"). Necesaria para indexar bookmaker_meta y
+    # snapshot de cuota cruda. selection sigue siendo human-readable.
+    market_key: Optional[str] = None
 
 
 @dataclass
@@ -83,34 +87,37 @@ class EVCalculator:
         """
         results = []
 
+        # (selection, market_key, prob, odd) — selection es human-readable,
+        # market_key es la clave canónica del dict odds.
         outcomes = [
             # 1X2
-            ("Local", probs.home_win, odds.get("home")),
-            ("Empate", probs.draw, odds.get("draw")),
-            ("Visitante", probs.away_win, odds.get("away")),
+            ("Local",      "home",              probs.home_win, odds.get("home")),
+            ("Empate",     "draw",              probs.draw,     odds.get("draw")),
+            ("Visitante",  "away",              probs.away_win, odds.get("away")),
             # Doble Oportunidad
-            ("1X", probs.double_chance_1x, odds.get("double_chance_1x")),
-            ("X2", probs.double_chance_x2, odds.get("double_chance_x2")),
-            ("12", probs.double_chance_12, odds.get("double_chance_12")),
+            ("1X",         "double_chance_1x",  probs.double_chance_1x, odds.get("double_chance_1x")),
+            ("X2",         "double_chance_x2",  probs.double_chance_x2, odds.get("double_chance_x2")),
+            ("12",         "double_chance_12",  probs.double_chance_12, odds.get("double_chance_12")),
             # Over/Under
-            ("Over 1.5", probs.over_15, odds.get("over_15")),
-            ("Under 1.5", probs.under_15, odds.get("under_15")),
-            ("Over 2.5", probs.over_25, odds.get("over_25")),
-            ("Under 2.5", probs.under_25, odds.get("under_25")),
-            ("Over 3.5", probs.over_35, odds.get("over_35")),
-            ("Under 3.5", probs.under_35, odds.get("under_35")),
+            ("Over 1.5",   "over_15",           probs.over_15,  odds.get("over_15")),
+            ("Under 1.5",  "under_15",          probs.under_15, odds.get("under_15")),
+            ("Over 2.5",   "over_25",           probs.over_25,  odds.get("over_25")),
+            ("Under 2.5",  "under_25",          probs.under_25, odds.get("under_25")),
+            ("Over 3.5",   "over_35",           probs.over_35,  odds.get("over_35")),
+            ("Under 3.5",  "under_35",          probs.under_35, odds.get("under_35")),
             # BTTS
-            ("BTTS Sí", probs.btts_yes, odds.get("btts_yes")),
-            ("BTTS No", probs.btts_no, odds.get("btts_no")),
+            ("BTTS Sí",    "btts_yes",          probs.btts_yes, odds.get("btts_yes")),
+            ("BTTS No",    "btts_no",           probs.btts_no,  odds.get("btts_no")),
         ]
 
         # min_ev está en fracción (0.03 = 3%), ev también en fracción
-        for name, prob, odd in outcomes:
+        for name, mk, prob, odd in outcomes:
             if odd and odd > 1.0:
                 ev = (prob * odd) - 1.0
                 ev_percent = round(ev * 100, 2)
                 results.append(EVResult(
                     selection=name,
+                    market_key=mk,
                     probability=round(prob, 4),
                     odds=odd,
                     ev=round(ev, 4),
@@ -179,19 +186,21 @@ class EVCalculator:
         """
         results = []
 
+        # (selection, market_key, prob, odd, line)
         outcomes = [
             # Moneyline
-            ("Home", probs.home_win, odds.get("home"), None),
-            ("Away", probs.away_win, odds.get("away"), None),
-            # Spread
-            ("Spread Home", probs.home_cover_prob, odds.get("spread_home"), odds.get("spread_line")),
-            ("Spread Away", probs.away_cover_prob, odds.get("spread_away"), -odds.get("spread_line") if odds.get("spread_line") is not None else None),
+            ("Home",        "home",         probs.home_win,        odds.get("home"),        None),
+            ("Away",        "away",         probs.away_win,        odds.get("away"),        None),
+            # Spread — la línea de Spread Away va negada para apuesta-equivalente
+            ("Spread Home", "spread_home",  probs.home_cover_prob, odds.get("spread_home"), odds.get("spread_line")),
+            ("Spread Away", "spread_away",  probs.away_cover_prob, odds.get("spread_away"),
+                -odds.get("spread_line") if odds.get("spread_line") is not None else None),
             # Totals
-            ("Over", probs.over_total, odds.get("over"), odds.get("total_line")),
-            ("Under", probs.under_total, odds.get("under"), odds.get("total_line")),
+            ("Over",        "over",         probs.over_total,      odds.get("over"),        odds.get("total_line")),
+            ("Under",       "under",        probs.under_total,     odds.get("under"),       odds.get("total_line")),
         ]
 
-        for name, prob, odd, line in outcomes:
+        for name, mk, prob, odd, line in outcomes:
             if not (odd and odd > 1.0 and prob > 0):
                 continue
 
@@ -228,6 +237,7 @@ class EVCalculator:
 
             results.append(EVResult(
                 selection=name,
+                market_key=mk,
                 probability=round(prob, 4),
                 odds=odd,
                 ev=round(ev, 4),

@@ -247,3 +247,98 @@ def test_recent_analyses(mock_db):
 
     recent = mock_db.get_recent_analyses(limit=3)
     assert len(recent) == 3
+
+
+# ── Paper trading: bookmaker + odds_at_pick + is_paper + created_at ───────
+
+def test_save_analysis_persists_bookmaker_and_odds_at_pick(mock_db):
+    """
+    Con bookmaker_meta poblado (modo USE_RAW_ODDS=1), value_bets persiste
+    bookmaker per-mercado, odds_at_pick = ev.odds, is_paper=1, created_at
+    no nulo.
+    """
+    analysis = _make_analysis(has_value=True)
+    # EVResult del fixture tiene selection="Local"; le añadimos market_key
+    # y poblamos bookmaker_meta paralelo.
+    analysis.ev_results[0].market_key = "home"
+    analysis.bookmaker_meta = {"home": "pinnacle", "draw": "bet365", "away": "unibet"}
+
+    mock_db.save_analysis(analysis)
+
+    with mock_db._get_conn() as conn:
+        row = conn.execute(
+            "SELECT bookmaker, odds_at_pick, is_paper, created_at, odds "
+            "FROM value_bets WHERE selection = 'Local'"
+        ).fetchone()
+
+    assert row["bookmaker"] == "pinnacle"
+    assert row["odds_at_pick"] == row["odds"]   # ev.odds tal cual
+    assert row["is_paper"] == 1
+    assert row["created_at"] is not None
+    assert "T" in row["created_at"]              # ISO 8601
+
+
+def test_save_analysis_legacy_bookmaker(mock_db):
+    """
+    Sin bookmaker_meta, _resolve_legacy_bookmaker decide:
+      - h2h home/draw/away → 'bet365' si bet365_odds lo cubre
+      - spreads            → 'bet365' si bet365_odds lo cubre
+      - over_25, btts_yes  → 'trimmed_avg'
+    """
+    analysis = _make_analysis(has_value=True)
+    analysis.bookmaker_meta = None
+    analysis.bet365_odds = {
+        "h2h_home":     1.85,
+        "h2h_draw":     3.40,
+        "h2h_away":     4.20,
+        "spread_home":  1.91,
+        "spread_away":  None,
+        "spread_line":  -2.5,
+    }
+
+    # Picks de los 6 mercados a verificar
+    analysis.ev_results = [
+        EVResult(selection="Local",     market_key="home",         probability=0.55, odds=1.85, ev=0.02, ev_percent=2.0,  is_value=True),
+        EVResult(selection="Empate",    market_key="draw",         probability=0.30, odds=3.40, ev=0.02, ev_percent=2.0,  is_value=True),
+        EVResult(selection="Visitante", market_key="away",         probability=0.24, odds=4.20, ev=0.01, ev_percent=1.0,  is_value=True),
+        EVResult(selection="Spread Home", market_key="spread_home", probability=0.55, odds=1.91, ev=0.05, ev_percent=5.0, is_value=True, line=-2.5),
+        EVResult(selection="Over 2.5",  market_key="over_25",      probability=0.55, odds=2.10, ev=0.155, ev_percent=15.5, is_value=True),
+        EVResult(selection="BTTS Sí",   market_key="btts_yes",     probability=0.55, odds=1.85, ev=0.02, ev_percent=2.0,  is_value=True),
+    ]
+
+    mock_db.save_analysis(analysis)
+
+    with mock_db._get_conn() as conn:
+        rows = {
+            r["selection"]: r["bookmaker"]
+            for r in conn.execute(
+                "SELECT selection, bookmaker FROM value_bets"
+            ).fetchall()
+        }
+
+    assert rows["Local"]       == "bet365"
+    assert rows["Empate"]      == "bet365"   # post-arreglo 1
+    assert rows["Visitante"]   == "bet365"
+    assert rows["Spread Home"] == "bet365"
+    assert rows["Over 2.5"]    == "trimmed_avg"
+    assert rows["BTTS Sí"]     == "trimmed_avg"
+
+
+def test_save_analysis_legacy_bookmaker_no_bet365_data(mock_db):
+    """
+    bookmaker_meta=None y bet365_odds=None → todos los picks marcados
+    'trimmed_avg' (no podemos afirmar Bet365 sin evidencia).
+    """
+    analysis = _make_analysis(has_value=True)
+    analysis.bookmaker_meta = None
+    analysis.bet365_odds = None
+    analysis.ev_results[0].market_key = "home"
+
+    mock_db.save_analysis(analysis)
+
+    with mock_db._get_conn() as conn:
+        row = conn.execute(
+            "SELECT bookmaker FROM value_bets WHERE selection = 'Local'"
+        ).fetchone()
+
+    assert row["bookmaker"] == "trimmed_avg"

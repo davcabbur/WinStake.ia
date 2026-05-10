@@ -6,7 +6,7 @@ Almacena historial de análisis, value bets y resultados reales.
 import sqlite3
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from contextlib import contextmanager
 
@@ -275,17 +275,33 @@ class Database:
                 # Inicializar calculadora EV una vez por partido
                 ev_calc = EVCalculator()
 
+                # Resolver bookmaker por pick (paper trading tracking).
+                # Si bookmaker_meta está poblado (USE_RAW_ODDS=1), es la verdad
+                # per-mercado de chosen_book_meta. Si no, helper legacy.
+                bookmaker_meta = getattr(analysis, "bookmaker_meta", None)
+                bet365_odds    = getattr(analysis, "bet365_odds", None)
+                created_at     = datetime.now(timezone.utc).isoformat()
+
                 # Guardar TODAS las value bets del partido
                 for ev in analysis.ev_results:
                     if not ev.is_value:
                         continue
                     kelly = ev_calc.kelly_criterion(ev.probability, ev.odds)
                     confidence = self._classify_ev(ev.ev_percent)
+
+                    market_key = getattr(ev, "market_key", None)
+                    if bookmaker_meta is not None and market_key is not None:
+                        bookmaker = bookmaker_meta.get(market_key)
+                    else:
+                        bookmaker = self._resolve_legacy_bookmaker(market_key, bet365_odds)
+
                     conn.execute("""
                         INSERT INTO value_bets (
                             analysis_id, sport, selection, probability, odds,
-                            ev_percent, kelly_full, kelly_half, stake_units, confidence, line
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            ev_percent, kelly_full, kelly_half, stake_units,
+                            confidence, line,
+                            bookmaker, odds_at_pick, is_paper, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
                         analysis_id,
                         sport,
@@ -298,6 +314,10 @@ class Database:
                         kelly.stake_units,
                         confidence,
                         ev.line,
+                        bookmaker,
+                        ev.odds,            # odds_at_pick = la cuota usada para EV
+                        1,                  # is_paper (paper trading por defecto)
+                        created_at,
                     ))
 
                 conn.commit()
@@ -306,6 +326,34 @@ class Database:
             except Exception:
                 conn.rollback()
                 raise
+
+    @staticmethod
+    def _resolve_legacy_bookmaker(market_key: Optional[str],
+                                   bet365_odds: Optional[dict]) -> str:
+        """
+        Cuando USE_RAW_ODDS=0 y no hay bookmaker_meta, replica la convención
+        de odds_client._parse_odds:
+          - h2h (home/draw/away) y spreads → "bet365" si Bet365 cubrió ese
+            mercado específico (avg_odds.* prefiere Bet365 cuando está
+            disponible), si no "trimmed_avg".
+          - Resto de mercados (totals, BTTS, double_chance, …): siempre
+            "trimmed_avg" (avg_odds usa _trimmed_mean sobre todos los books).
+        """
+        bet365_per_market = {
+            "home":         "h2h_home",
+            "draw":         "h2h_draw",
+            "away":         "h2h_away",
+            "spread_home":  "spread_home",
+            "spread_away":  "spread_away",
+            "spread_line":  "spread_line",
+        }
+        if (
+            bet365_odds
+            and market_key in bet365_per_market
+            and bet365_odds.get(bet365_per_market[market_key]) is not None
+        ):
+            return "bet365"
+        return "trimmed_avg"
 
     # ── Registrar resultados reales ───────────────────────────
 

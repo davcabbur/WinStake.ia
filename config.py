@@ -50,3 +50,9 @@ CACHE_TTL_ODDS = 30 * 60          # 30 minutos — cuotas cambian frecuentemente
 CACHE_TTL_STANDINGS = 2 * 60 * 60 # 2 horas — clasificación cambia poco
 CACHE_TTL_TEAM_STATS = 4 * 60 * 60 # 4 horas — stats detalladas
 CACHE_TTL_H2H = 24 * 60 * 60     # 24 horas — historial no cambia
+
+# ── Paper trading ─────────────────────────────────────────
+# Cuando =1, el motor de análisis usa la cuota cruda del bookmaker elegido
+# (chosen_book_odds) en lugar de la trimmed mean (avg_odds). Por defecto OFF
+# para no alterar las recomendaciones que se envían a Telegram en producción.
+USE_RAW_ODDS = os.getenv("WINSTAKE_USE_RAW_ODDS", "0") == "1"

@@ -18,7 +18,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config
 from src.database import Database
-from src.odds_client import OddsClient
+from src.odds_client import OddsClient, resolve_odds_source
 from src.football_client import FootballClient
 from src.nba_client import NBAClient
 from src.analyzer import Analyzer
@@ -325,8 +325,8 @@ def _run_analysis_for_jornada(sport_config: SportConfig = None) -> tuple[dict, d
     for match in matches_odds:
         home = match["home_team"]
         away = match["away_team"]
-        odds = match["avg_odds"]
         match_id = match.get("id", f"{home}_{away}")
+        odds, bookmaker_meta = resolve_odds_source(match)
 
         home_stats = stats_client.find_team_in_standings(home, standings)
         away_stats = stats_client.find_team_in_standings(away, standings)
@@ -353,6 +353,8 @@ def _run_analysis_for_jornada(sport_config: SportConfig = None) -> tuple[dict, d
             h2h_data=h2h_data,
             match_id=match_id,
             scorers=match_scorers,
+            bookmaker_meta=bookmaker_meta,
+            bet365_odds=match.get("bet365_odds"),
         )
         analyses[match_id] = analysis
 
@@ -369,7 +371,11 @@ def _run_analysis_for_jornada(sport_config: SportConfig = None) -> tuple[dict, d
                 )
                 lineup_updates[mid] = {"status": status, "data": upd}
                 if status == "adjusted" and upd:
-                    # Reemplazar el análisis base por el ajustado con onces
+                    # Reemplazar el análisis base por el ajustado con onces.
+                    # Preservar bookmaker_meta y bet365_odds del análisis
+                    # original — el monitor de onces no los conoce.
+                    upd["adjusted"].bookmaker_meta = analyses[mid].bookmaker_meta
+                    upd["adjusted"].bet365_odds    = analyses[mid].bet365_odds
                     analyses[mid] = upd["adjusted"]
                     logger.info(
                         f"📋 Onces integrados en análisis: "

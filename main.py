@@ -10,7 +10,7 @@ import argparse
 from datetime import datetime
 
 import config
-from src.odds_client import OddsClient
+from src.odds_client import OddsClient, resolve_odds_source
 from src.football_client import FootballClient
 from src.nba_client import NBAClient
 from src.analyzer import Analyzer
@@ -208,7 +208,7 @@ def main(cli_args: list = None):
     for match in matches_odds:
         home = match["home_team"]
         away = match["away_team"]
-        odds = match["avg_odds"]
+        odds, bookmaker_meta = resolve_odds_source(match)
 
         logger.info(f"   Analizando: {home} vs {away}")
 
@@ -236,6 +236,8 @@ def main(cli_args: list = None):
             h2h_data=h2h_data,
             match_id=match.get("id", f"{home}_{away}"),
             scorers=match_scorers,
+            bookmaker_meta=bookmaker_meta,
+            bet365_odds=match.get("bet365_odds"),
         )
         analyses.append(analysis)
 
