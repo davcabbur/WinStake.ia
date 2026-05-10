@@ -31,6 +31,24 @@ def _create_session(retries: int = 3, backoff_factor: float = 0.5) -> requests.S
     return session
 
 
+def resolve_odds_source(match: dict) -> tuple[dict, Optional[dict]]:
+    """
+    Devuelve (odds, bookmaker_meta) según el feature flag USE_RAW_ODDS.
+
+    USE_RAW_ODDS=1 → chosen_book_odds (cuota cruda del libro elegido) y
+                     chosen_book_meta (mapa market_key → bookmaker).
+    USE_RAW_ODDS=0 → avg_odds (trimmed mean — comportamiento histórico) y
+                     bookmaker_meta=None (la convención legacy se resuelve
+                     en Database._resolve_legacy_bookmaker).
+
+    Extraído para testabilidad: el switch se testea contra esta función sin
+    mockear todo el pipeline de main.py / bot_daemon.py.
+    """
+    if config.USE_RAW_ODDS:
+        return match["chosen_book_odds"], match["chosen_book_meta"]
+    return match["avg_odds"], None
+
+
 class OddsClient:
     """Cliente para The Odds API v4. Soporta múltiples deportes."""
 
@@ -183,16 +201,37 @@ class OddsClient:
             bookmakers = event.get("bookmakers", [])
             match["bookmakers_count"] = len(bookmakers)
 
+            # Tracking de cuota cruda por mercado: (bm_key, price, line|None).
+            # Preserva el orden de aparición de los bookmakers en la respuesta.
+            # Se usa en la pasada 3 para construir chosen_book_odds (cuota
+            # cruda del libro elegido, sin promediar).
+            raw_books_by_market: dict[str, list[tuple[str, float, Optional[float]]]] = {
+                k: [] for k in (
+                    "home", "draw", "away",
+                    "double_chance_1x", "double_chance_x2", "double_chance_12",
+                    "over_15", "under_15",
+                    "over_25", "under_25",
+                    "over_35", "under_35",
+                    "over_main", "under_main",
+                    "btts_yes", "btts_no",
+                    "spread_home", "spread_away",
+                )
+            }
+
             for bm in bookmakers:
+                bm_key = bm.get("key", "unknown")
                 for market in bm.get("markets", []):
                     if market["key"] == "h2h":
                         for o in market.get("outcomes", []):
                             if o["name"] == event["home_team"]:
                                 match["odds_h2h"]["home"].append(o["price"])
+                                raw_books_by_market["home"].append((bm_key, o["price"], None))
                             elif o["name"] == event["away_team"]:
                                 match["odds_h2h"]["away"].append(o["price"])
+                                raw_books_by_market["away"].append((bm_key, o["price"], None))
                             elif o["name"] == "Draw":
                                 match["odds_h2h"]["draw"].append(o["price"])
+                                raw_books_by_market["draw"].append((bm_key, o["price"], None))
 
                     elif market["key"] == "totals":
                         for o in market.get("outcomes", []):
@@ -200,23 +239,31 @@ class OddsClient:
                             if o["name"] == "Over":
                                 if point == 1.5:
                                     match["odds_totals"]["over_15"].append(o["price"])
+                                    raw_books_by_market["over_15"].append((bm_key, o["price"], 1.5))
                                 elif point == 2.5:
                                     match["odds_totals"]["over_25"].append(o["price"])
+                                    raw_books_by_market["over_25"].append((bm_key, o["price"], 2.5))
                                 elif point == 3.5:
                                     match["odds_totals"]["over_35"].append(o["price"])
+                                    raw_books_by_market["over_35"].append((bm_key, o["price"], 3.5))
                                 # Linea principal generica (NBA: ~224.5, etc.)
                                 if point > 50:
                                     match["odds_totals"]["over_main"].append(o["price"])
                                     match["odds_totals"]["main_line"].append(point)
+                                    raw_books_by_market["over_main"].append((bm_key, o["price"], point))
                             elif o["name"] == "Under":
                                 if point == 1.5:
                                     match["odds_totals"]["under_15"].append(o["price"])
+                                    raw_books_by_market["under_15"].append((bm_key, o["price"], 1.5))
                                 elif point == 2.5:
                                     match["odds_totals"]["under_25"].append(o["price"])
+                                    raw_books_by_market["under_25"].append((bm_key, o["price"], 2.5))
                                 elif point == 3.5:
                                     match["odds_totals"]["under_35"].append(o["price"])
+                                    raw_books_by_market["under_35"].append((bm_key, o["price"], 3.5))
                                 if point > 50:
                                     match["odds_totals"]["under_main"].append(o["price"])
+                                    raw_books_by_market["under_main"].append((bm_key, o["price"], point))
 
                     elif market["key"] == "spreads":
                         for o in market.get("outcomes", []):
@@ -224,26 +271,33 @@ class OddsClient:
                             if o["name"] == event["home_team"]:
                                 match["odds_spreads"]["home"].append(o["price"])
                                 match["odds_spreads"]["home_points"].append(point)
+                                raw_books_by_market["spread_home"].append((bm_key, o["price"], point))
                             elif o["name"] == event["away_team"]:
                                 match["odds_spreads"]["away"].append(o["price"])
                                 match["odds_spreads"]["away_points"].append(point)
+                                raw_books_by_market["spread_away"].append((bm_key, o["price"], point))
 
                     elif market["key"] == "btts":
                         for o in market.get("outcomes", []):
                             if o["name"] == "Yes":
                                 match["odds_btts"]["yes"].append(o["price"])
+                                raw_books_by_market["btts_yes"].append((bm_key, o["price"], None))
                             elif o["name"] == "No":
                                 match["odds_btts"]["no"].append(o["price"])
+                                raw_books_by_market["btts_no"].append((bm_key, o["price"], None))
 
                     elif market["key"] == "double_chance":
                         for o in market.get("outcomes", []):
                             name = o["name"]
                             if name == f"{event['home_team']} or Draw":
                                 match["odds_double_chance"]["1x"].append(o["price"])
+                                raw_books_by_market["double_chance_1x"].append((bm_key, o["price"], None))
                             elif name == f"{event['away_team']} or Draw":
                                 match["odds_double_chance"]["x2"].append(o["price"])
+                                raw_books_by_market["double_chance_x2"].append((bm_key, o["price"], None))
                             elif "Draw" not in name:
                                 match["odds_double_chance"]["12"].append(o["price"])
+                                raw_books_by_market["double_chance_12"].append((bm_key, o["price"], None))
 
             # ── Extraer cuotas específicas de Bet365 ──────────────
             bet365_h2h = {"home": None, "away": None, "draw": None}
@@ -270,6 +324,7 @@ class OddsClient:
 
             match["bet365_odds"] = {
                 "h2h_home": bet365_h2h["home"],
+                "h2h_draw": bet365_h2h["draw"],
                 "h2h_away": bet365_h2h["away"],
                 "spread_home": bet365_spread["home"],
                 "spread_away": bet365_spread["away"],
@@ -322,6 +377,153 @@ class OddsClient:
                 match["avg_odds"]["over"] = match["avg_odds"].get("over_25")
                 match["avg_odds"]["under"] = match["avg_odds"].get("under_25")
                 match["avg_odds"]["total_line"] = 2.5
+
+            # ── Pasada 3: chosen_book_odds + chosen_book_meta ────
+            # Para cada mercado, elegimos la cuota cruda del libro:
+            #   1) Bet365 si aparece para ese mercado
+            #   2) Si no, el primer book con datos (orden de aparición)
+            # NO se promedia: se devuelve la cuota tal cual la cotizaba el libro,
+            # incluyendo la línea (spread/total) cuando aplique.
+            #
+            # Mercados pareados (spread_home/away+line, over/under+total_line):
+            # SIEMPRE del MISMO bookmaker. Una combinación de cuotas de libros
+            # distintos NO es apostable. Si no hay un único libro que cubra
+            # ambos lados, las 3 keys (cuotas + línea) quedan a None.
+            def _pick_chosen(entries):
+                if not entries:
+                    return None, None, None
+                for bm_key_, price, line in entries:
+                    if bm_key_ == "bet365":
+                        return bm_key_, price, line
+                return entries[0]
+
+            def _pick_chosen_pair(home_entries, away_entries):
+                """
+                Para mercados de dos lados, elige UN único bookmaker que cubra
+                ambos. Prioriza Bet365; si no, el primer book (en orden de
+                aparición en home_entries) que también esté en away_entries.
+                Devuelve (bm_key, home_entry, away_entry) o (None,None,None).
+                """
+                home_books = {bm for bm, _, _ in home_entries}
+                away_books = {bm for bm, _, _ in away_entries}
+                common = home_books & away_books
+                if not common:
+                    return None, None, None
+                if "bet365" in common:
+                    chosen = "bet365"
+                else:
+                    chosen = next((bm for bm, _, _ in home_entries if bm in common), None)
+                if chosen is None:
+                    return None, None, None
+                home_entry = next(e for e in home_entries if e[0] == chosen)
+                away_entry = next(e for e in away_entries if e[0] == chosen)
+                return chosen, home_entry, away_entry
+
+            def _dedupe_to_market_main(entries):
+                """
+                Si un mismo book publica varias líneas alternativas (típico en
+                NBA), quedarse con la entrada cuya línea esté más cerca de la
+                mediana global de líneas vistas en el mercado.
+
+                Justificación del criterio (mediana vs precio cercano a 1.91):
+                la mediana captura el consenso de mercado entre todos los
+                libros y es robusta a outliers (un libro con línea anómala
+                no la mueve). Un criterio basado en "precio más balanceado"
+                depende del vig específico de cada libro y daría resultados
+                sesgados cuando los libros aplican márgenes asimétricos.
+                """
+                if not entries:
+                    return entries
+                lines = [line for _, _, line in entries if line is not None]
+                if not lines:
+                    return entries
+                sorted_lines = sorted(lines)
+                n = len(sorted_lines)
+                if n % 2 == 1:
+                    median_line = sorted_lines[n // 2]
+                else:
+                    median_line = (sorted_lines[n // 2 - 1] + sorted_lines[n // 2]) / 2
+                # Por book: la entrada con línea más cercana a la mediana
+                by_book: dict = {}
+                for e in entries:
+                    bm, _, line = e
+                    best = by_book.get(bm)
+                    if best is None or abs(line - median_line) < abs(best[2] - median_line):
+                        by_book[bm] = e
+                # Preservar orden de primera aparición de cada book
+                seen, out = set(), []
+                for e in entries:
+                    bm = e[0]
+                    if bm not in seen:
+                        out.append(by_book[bm])
+                        seen.add(bm)
+                return out
+
+            chosen_book_odds: dict = {}
+            chosen_book_meta: dict = {}
+
+            # Mercados sin acoplamiento entre lados o líneas
+            for mk in (
+                "home", "draw", "away",
+                "double_chance_1x", "double_chance_x2", "double_chance_12",
+                "over_15", "under_15", "over_25", "under_25", "over_35", "under_35",
+                "btts_yes", "btts_no",
+            ):
+                bm_, price_, _line_ = _pick_chosen(raw_books_by_market[mk])
+                chosen_book_odds[mk] = price_
+                chosen_book_meta[mk] = bm_
+
+            # ── Spreads acoplados: spread_home + spread_away + spread_line ──
+            sp_bm, sp_h, sp_a = _pick_chosen_pair(
+                raw_books_by_market["spread_home"],
+                raw_books_by_market["spread_away"],
+            )
+            if sp_bm is not None:
+                chosen_book_odds["spread_home"] = sp_h[1]
+                chosen_book_odds["spread_away"] = sp_a[1]
+                chosen_book_odds["spread_line"] = sp_h[2]
+                chosen_book_meta["spread_home"] = sp_bm
+                chosen_book_meta["spread_away"] = sp_bm
+                chosen_book_meta["spread_line"] = sp_bm
+            else:
+                for k in ("spread_home", "spread_away", "spread_line"):
+                    chosen_book_odds[k] = None
+                    chosen_book_meta[k] = None
+
+            # ── Totals acoplados: over + under + total_line ──
+            # NBA prioriza over_main/under_main (línea variable, dedup por mediana).
+            # Fútbol cae a over_25/under_25 con línea fija 2.5 (también pareado).
+            over_main_d  = _dedupe_to_market_main(raw_books_by_market["over_main"])
+            under_main_d = _dedupe_to_market_main(raw_books_by_market["under_main"])
+
+            tot_bm, tot_o, tot_u = _pick_chosen_pair(over_main_d, under_main_d)
+            if tot_bm is not None:
+                chosen_book_odds["over"]       = tot_o[1]
+                chosen_book_odds["under"]      = tot_u[1]
+                chosen_book_odds["total_line"] = tot_o[2]
+                chosen_book_meta["over"]       = tot_bm
+                chosen_book_meta["under"]      = tot_bm
+                chosen_book_meta["total_line"] = tot_bm
+            else:
+                # Fallback fútbol: over_25 + under_25 del mismo libro, línea fija 2.5
+                fb_bm, fb_o, fb_u = _pick_chosen_pair(
+                    raw_books_by_market["over_25"],
+                    raw_books_by_market["under_25"],
+                )
+                if fb_bm is not None:
+                    chosen_book_odds["over"]       = fb_o[1]
+                    chosen_book_odds["under"]      = fb_u[1]
+                    chosen_book_odds["total_line"] = 2.5
+                    chosen_book_meta["over"]       = fb_bm
+                    chosen_book_meta["under"]      = fb_bm
+                    chosen_book_meta["total_line"] = fb_bm
+                else:
+                    for k in ("over", "under", "total_line"):
+                        chosen_book_odds[k] = None
+                        chosen_book_meta[k] = None
+
+            match["chosen_book_odds"] = chosen_book_odds
+            match["chosen_book_meta"] = chosen_book_meta
 
             matches.append(match)
 
