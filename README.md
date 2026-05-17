@@ -8,8 +8,9 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.10+-blue?logo=python&logoColor=white" alt="Python"/>
-  <img src="https://img.shields.io/badge/Liga-La%20Liga-orange?logo=laliga&logoColor=white" alt="La Liga"/>
+  <img src="https://img.shields.io/badge/Liga-La%20Liga-lightgrey?logo=laliga&logoColor=white" alt="La Liga (deshabilitada)"/>
   <img src="https://img.shields.io/badge/Liga-NBA-red?logo=nba&logoColor=white" alt="NBA"/>
+  <img src="https://img.shields.io/badge/Acceso-Tailscale-yellow?logo=tailscale&logoColor=white" alt="Tailscale"/>
   <img src="https://img.shields.io/badge/Telegram-Bot-26A5E4?logo=telegram&logoColor=white" alt="Telegram"/>
   <img src="https://img.shields.io/badge/License-MIT-green" alt="License"/>
 </p>
@@ -30,8 +31,8 @@ WinStake.ia es un sistema de análisis cuantitativo multi-deporte que:
 8. **Valida estrategias** usando un **Motor de Backtesting Histórico**
 
 **Deportes soportados:**
-- **La Liga** — Modelo Poisson, mercados 1X2, Over/Under, BTTS, Doble Oportunidad
-- **NBA** — Modelo Normal, mercados Moneyline, Spread, Totals
+- **NBA** — Modelo Normal, mercados Moneyline, Spread, Totals *(activo)*
+- **La Liga** — Modelo Poisson, mercados 1X2, Over/Under, BTTS, Doble Oportunidad *(deshabilitado temporalmente — plan free de API-Football no da acceso a la temporada actual)*
 
 > **Objetivo:** Maximizar el valor esperado (EV) a largo plazo, no las victorias a corto plazo.
 
@@ -122,8 +123,9 @@ WinStake.ia/
 │   ├── telegram_bot.py    # Bot de Telegram
 │   └── backtester/        # Motor de backtesting histórico y evaluación
 ├── app/                   # FastAPI backend (dashboard)
-├── frontend/              # Angular 18 frontend
-└── tests/                 # 149 tests (Poisson, Normal, NBA, DB)
+├── frontend/              # Angular 18 frontend (ng serve --host 0.0.0.0)
+├── ecosystem.config.js    # PM2: winstake-api, bot, settle, frontend
+└── tests/                 # 201 tests (Poisson, Normal, NBA, DB)
 ```
 
 ---
@@ -201,20 +203,54 @@ python main.py --backtest 24               # Backtest temporada 2024/25
 python main.py --verify                    # Verificar resultados pendientes
 ```
 
-### Scheduler automático
+### Scheduler automático (legacy)
 ```bash
-python scheduler.py                  # Ambos deportes (La Liga + NBA)
-python scheduler.py --sport nba      # Solo NBA (diario 16:00)
-python scheduler.py --sport laliga   # Solo La Liga (Vie-Dom 09:00)
-python scheduler.py --once --sport nba  # Ejecución única NBA
+python scheduler.py --sport nba      # Ejecución puntual NBA
+python scheduler.py --once --sport nba
 ```
 
 ### API REST (dashboard)
 ```bash
 python run_api.py
 # GET /api/v1/analysis?sport=nba     # Análisis NBA
-# GET /api/v1/analysis?sport=laliga  # Análisis La Liga
+# GET /health                        # Health check
 ```
+
+### Ejecución continua con PM2 (producción local)
+
+El sistema completo corre como 4 procesos gestionados por PM2:
+
+```bash
+# Arrancar todo
+pm2 start ecosystem.config.js
+
+# Estado
+pm2 status
+
+# Logs
+pm2 logs
+
+# Persistir entre reinicios
+pm2 save
+```
+
+| Proceso | Descripción |
+|---|---|
+| `winstake-api` | FastAPI en `0.0.0.0:8000` |
+| `winstake-bot` | Bot de Telegram (polling) |
+| `winstake-settle` | Daemon de liquidación de value bets cada 60 min |
+| `winstake-frontend` | Angular dev server en `0.0.0.0:4200` |
+
+### Acceso remoto vía Tailscale
+
+Con [Tailscale](https://tailscale.com) instalado en el host y en el dispositivo cliente:
+
+```
+http://<tailscale-ip>:4200   # Dashboard Angular
+http://<tailscale-ip>:8000   # API REST directa
+```
+
+La URL de la API se construye dinámicamente con `window.location.hostname`, por lo que el dashboard funciona sin cambios tanto en localhost como en la IP Tailscale.
 
 ### Modo desarrollo (sin API keys)
 Si no configuras las API keys, el sistema funciona con **datos simulados** para ambos deportes. Esto permite probar todo el flujo sin gastar requests.
@@ -355,7 +391,7 @@ Parametros NBA se configuran en `src/sports/config.py`:
 ```bash
 python -m pytest tests/ -q
 
-# 149 tests:
+# 201 tests:
 # - Poisson: probabilidades, lambda, correct score, asian handicap
 # - Normal (NBA): scores, spreads, totals, H2H adjustment
 # - EV Calculator: futbol + NBA markets, correlaciones
@@ -363,6 +399,8 @@ python -m pytest tests/ -q
 # - Database: save, ROI, pending results, multi-deporte
 # - NBAClient: standings, team search, fuzzy match
 # - Analyzer routing: futbol vs basketball
+# - Settle daemon: ventana temporal, resolución de picks
+# - Odds source: raw odds flag
 ```
 
 ---
