@@ -27,6 +27,7 @@ module.exports = {
       env: {
         PYTHONUNBUFFERED: '1',
         PYTHONUTF8: '1',
+        CORS_ORIGINS: '*',
       },
       log_file: path.join(projectDir, 'logs', 'api.log'),
       error_file: path.join(projectDir, 'logs', 'api.error.log'),
@@ -68,10 +69,10 @@ module.exports = {
     },
     {
       name: 'winstake-frontend',
-      script: 'cmd',
-      args: '/c npm start',
+      script: path.join(projectDir, 'frontend', 'node_modules', '@angular', 'cli', 'bin', 'ng.js'),
+      args: 'serve --host 0.0.0.0 --port 4200',
       cwd: path.join(projectDir, 'frontend'),
-      interpreter: 'none',
+      interpreter: 'node',
       autorestart: true,
       watch: false,
       max_memory_restart: '1G',

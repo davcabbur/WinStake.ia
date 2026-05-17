@@ -11,6 +11,9 @@
  */
 export const environment = {
   production: true,
-  apiBaseUrl: 'http://localhost:8000',
+  apiPort: 8000,
   apiKey: '',
+  get apiBaseUrl() {
+    return `http://${window.location.hostname}:${this.apiPort}`;
+  }
 };
