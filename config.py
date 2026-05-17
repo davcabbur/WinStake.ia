@@ -56,3 +56,8 @@ CACHE_TTL_H2H = 24 * 60 * 60     # 24 horas — historial no cambia
 # (chosen_book_odds) en lugar de la trimmed mean (avg_odds). Por defecto OFF
 # para no alterar las recomendaciones que se envían a Telegram en producción.
 USE_RAW_ODDS = os.getenv("WINSTAKE_USE_RAW_ODDS", "0") == "1"
+
+# ── Feature flags ─────────────────────────────────────────
+# OFF por defecto: el plan free de API-Football no permite la temporada actual.
+# Para reactivar: WINSTAKE_LALIGA_ENABLED=1 en el entorno.
+LALIGA_ENABLED = os.getenv("WINSTAKE_LALIGA_ENABLED", "0") == "1"

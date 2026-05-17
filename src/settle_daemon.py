@@ -14,6 +14,7 @@ import schedule
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import config
 from src.logger_config import setup_logging
 from src.database import DB_PATH
 from src.result_verifier import verify_results
@@ -35,12 +36,16 @@ def settle_all() -> dict:
     """Ejecuta un ciclo de settle para LaLiga y NBA, aislando errores por deporte."""
     summary: dict = {"laliga": None, "nba": None}
 
-    try:
-        logger.info("⚽ Settle LaLiga (verify_pending)...")
-        summary["laliga"] = verify_results()
-    except Exception as e:
-        logger.error(f"Error en settle LaLiga: {e}", exc_info=True)
-        summary["laliga"] = {"error": str(e)}
+    if config.LALIGA_ENABLED:
+        try:
+            logger.info("⚽ Settle LaLiga (verify_pending)...")
+            summary["laliga"] = verify_results()
+        except Exception as e:
+            logger.error(f"Error en settle LaLiga: {e}", exc_info=True)
+            summary["laliga"] = {"error": str(e)}
+    else:
+        logger.info("LaLiga settle: skipped (disabled in config)")
+        summary["laliga"] = {"skipped": True}
 
     try:
         logger.info("🏀 Settle NBA (run_backtesting_check)...")

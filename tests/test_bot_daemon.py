@@ -1,7 +1,10 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from src.bot_daemon import start_command, ping_command, roi_command, _analizar_sport
+from src.bot_daemon import (
+    start_command, ping_command, roi_command, _analizar_sport,
+    laliga_command, analizar_command, _LALIGA_DISABLED_MSG,
+)
 
 @pytest.mark.asyncio
 async def test_start_command():
@@ -110,3 +113,30 @@ async def test_analizar_sport_with_matches(mock_run):
     
     args, kwargs = update.message.reply_html.call_args
     assert "Local vs Visitante" in str(kwargs.get("reply_markup"))
+
+
+@pytest.mark.asyncio
+@patch("src.bot_daemon._analizar_sport")
+async def test_laliga_command_disabled(mock_analizar):
+    update = MagicMock()
+    update.message = AsyncMock()
+    context = MagicMock()
+
+    await laliga_command(update, context)
+
+    mock_analizar.assert_not_called()
+    update.message.reply_text.assert_called_once_with(_LALIGA_DISABLED_MSG)
+    assert "desactivada temporalmente" in _LALIGA_DISABLED_MSG
+
+
+@pytest.mark.asyncio
+@patch("src.bot_daemon._analizar_sport")
+async def test_analizar_command_disabled(mock_analizar):
+    update = MagicMock()
+    update.message = AsyncMock()
+    context = MagicMock()
+
+    await analizar_command(update, context)
+
+    mock_analizar.assert_not_called()
+    update.message.reply_text.assert_called_once_with(_LALIGA_DISABLED_MSG)

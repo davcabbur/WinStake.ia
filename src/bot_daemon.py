@@ -35,6 +35,12 @@ from src.lineup_monitor import LineupMonitor, format_lineup_update
 
 logger = setup_logging("WinStakeBot")
 
+_LALIGA_DISABLED_MSG = (
+    "⚠️ LaLiga está desactivada temporalmente — el plan free de "
+    "API-Football no permite acceder a la temporada actual. "
+    "Foco exclusivo en NBA por ahora."
+)
+
 # Umbral PPG para considerar a un jugador como "estrella"
 _STAR_PPG_THRESHOLD = 18.0
 
@@ -712,13 +718,13 @@ def _build_match_keyboard(
 
 
 async def analizar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Atajo para /analizar (default: La Liga)."""
-    await _analizar_sport(update, context, "laliga")
+    """Atajo para /analizar (default: La Liga) — deshabilitado hasta upgrade API-Football."""
+    await update.message.reply_text(_LALIGA_DISABLED_MSG)
 
 
 async def laliga_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Analizar La Liga."""
-    await _analizar_sport(update, context, "laliga")
+    """Analizar La Liga — deshabilitado hasta upgrade API-Football."""
+    await update.message.reply_text(_LALIGA_DISABLED_MSG)
 
 
 async def nba_command(update: Update, context: ContextTypes.DEFAULT_TYPE):

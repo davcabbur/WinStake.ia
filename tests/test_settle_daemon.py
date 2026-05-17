@@ -19,7 +19,8 @@ def test_in_active_window(hour, expected):
 
 
 def test_settle_all_invokes_both_sports():
-    with patch.object(settle_daemon, "verify_results", return_value={"verified": 3}) as m_la, \
+    with patch.object(settle_daemon.config, "LALIGA_ENABLED", True), \
+         patch.object(settle_daemon, "verify_results", return_value={"verified": 3}) as m_la, \
          patch.object(settle_daemon, "run_backtesting_check", return_value={"resolved": 2}) as m_nba:
         result = settle_daemon.settle_all()
 
@@ -28,8 +29,21 @@ def test_settle_all_invokes_both_sports():
     assert result == {"laliga": {"verified": 3}, "nba": {"resolved": 2}}
 
 
+def test_settle_all_skips_laliga_when_disabled():
+    with patch.object(settle_daemon.config, "LALIGA_ENABLED", False), \
+         patch.object(settle_daemon, "verify_results") as m_la, \
+         patch.object(settle_daemon, "run_backtesting_check", return_value={"resolved": 2}) as m_nba:
+        result = settle_daemon.settle_all()
+
+    m_la.assert_not_called()
+    m_nba.assert_called_once()
+    assert result["laliga"] == {"skipped": True}
+    assert result["nba"] == {"resolved": 2}
+
+
 def test_settle_all_isolates_laliga_failure():
-    with patch.object(settle_daemon, "verify_results", side_effect=RuntimeError("API down")), \
+    with patch.object(settle_daemon.config, "LALIGA_ENABLED", True), \
+         patch.object(settle_daemon, "verify_results", side_effect=RuntimeError("API down")), \
          patch.object(settle_daemon, "run_backtesting_check", return_value={"resolved": 1}) as m_nba:
         result = settle_daemon.settle_all()
 
@@ -39,7 +53,8 @@ def test_settle_all_isolates_laliga_failure():
 
 
 def test_settle_all_isolates_nba_failure():
-    with patch.object(settle_daemon, "verify_results", return_value={"verified": 0}) as m_la, \
+    with patch.object(settle_daemon.config, "LALIGA_ENABLED", True), \
+         patch.object(settle_daemon, "verify_results", return_value={"verified": 0}) as m_la, \
          patch.object(settle_daemon, "run_backtesting_check", side_effect=RuntimeError("nba_api timeout")):
         result = settle_daemon.settle_all()
 
