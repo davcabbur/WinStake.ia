@@ -236,8 +236,8 @@ def run_backtesting_check(db_path: str) -> dict:
             ))
 
             conn.execute(
-                "UPDATE value_bets SET result = ? WHERE id = ?",
-                (result, bet_id)
+                "UPDATE value_bets SET result = ?, pnl_units = ?, settled_at = ? WHERE id = ?",
+                (result, profit, now_str, bet_id)
             )
 
             conn.commit()
