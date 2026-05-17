@@ -165,11 +165,32 @@ class Database:
         migrated |= _add_column_if_missing("value_bets", "result",       "result TEXT")
         migrated |= _add_column_if_missing("value_bets", "pnl_units",    "pnl_units REAL")
 
+        # ── Dedup key (partido+selección) ────────────────────
+        _add_column_if_missing("value_bets", "match_key", "match_key TEXT")
+
+        # Backfill idempotente solo para NBA (LaLiga nunca fue deduplicada)
+        conn.execute("""
+            UPDATE value_bets
+            SET match_key = (
+                SELECT a.home_team || '|' || a.away_team || '|' ||
+                       a.commence_time || '|' || value_bets.selection
+                FROM analyses a
+                WHERE a.id = value_bets.analysis_id
+            )
+            WHERE match_key IS NULL AND sport = 'nba'
+        """)
+
         # Índices (idempotentes)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_analyses_sport ON analyses(sport)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_value_bets_sport ON value_bets(sport)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_value_bets_paper ON value_bets(is_paper)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_value_bets_result ON value_bets(result)")
+        # Partial UNIQUE INDEX: sólo filas con match_key poblado (excluye LaLiga legacy con NULL)
+        conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_value_bets_dedup
+            ON value_bets (match_key, sport, is_paper)
+            WHERE match_key IS NOT NULL
+        """)
 
         if migrated:
             conn.commit()
@@ -295,13 +316,35 @@ class Database:
                     else:
                         bookmaker = self._resolve_legacy_bookmaker(market_key, bet365_odds)
 
+                    match_key = (
+                        f"{analysis.home_team}|{analysis.away_team}|"
+                        f"{analysis.commence_time}|{ev.selection}"
+                        if sport == "nba" else None
+                    )
+
                     conn.execute("""
                         INSERT INTO value_bets (
                             analysis_id, sport, selection, probability, odds,
                             ev_percent, kelly_full, kelly_half, stake_units,
                             confidence, line,
-                            bookmaker, odds_at_pick, is_paper, created_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            bookmaker, odds_at_pick, is_paper, created_at, match_key
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(match_key, sport, is_paper)
+                        WHERE match_key IS NOT NULL
+                        DO UPDATE SET
+                            analysis_id  = excluded.analysis_id,
+                            probability  = excluded.probability,
+                            odds         = excluded.odds,
+                            ev_percent   = excluded.ev_percent,
+                            kelly_full   = excluded.kelly_full,
+                            kelly_half   = excluded.kelly_half,
+                            stake_units  = excluded.stake_units,
+                            confidence   = excluded.confidence,
+                            line         = excluded.line,
+                            bookmaker    = excluded.bookmaker,
+                            odds_at_pick = excluded.odds_at_pick,
+                            created_at   = excluded.created_at
+                        WHERE value_bets.result IS NULL
                     """, (
                         analysis_id,
                         sport,
@@ -318,6 +361,7 @@ class Database:
                         ev.odds,            # odds_at_pick = la cuota usada para EV
                         1,                  # is_paper (paper trading por defecto)
                         created_at,
+                        match_key,
                     ))
 
                 conn.commit()

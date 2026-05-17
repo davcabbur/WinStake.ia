@@ -224,6 +224,83 @@ def test_pending_results(mock_db):
     assert pending[0]["selection"] == "Local"
 
 
+# ── UPSERT dedup NBA ──────────────────────────────────────
+
+def _make_nba_analysis(home="Lakers", away="Celtics", selection="Over", odds=1.91, line=215.5) -> MatchAnalysis:
+    """NBA-style analysis for UPSERT tests."""
+    from src.ev_calculator import EVResult
+    analysis = MatchAnalysis(
+        home_team=home,
+        away_team=away,
+        commence_time="2026-05-01T00:00:00Z",
+        probabilities=MatchProbabilities(
+            home_win=0.55, draw=0.0, away_win=0.45,
+            over_25=0.60, under_25=0.40,
+            lambda_home=1.5, lambda_away=1.1,
+        ),
+        market_odds={"home": 1.91, "away": 1.91, "over": odds, "under": 1.91},
+        recommendation=f"{selection} @ {odds}",
+        confidence="Media",
+    )
+    ev_result = EVResult(
+        selection=selection, probability=0.58, odds=odds,
+        ev=0.1, ev_percent=10.0, is_value=True, line=line,
+    )
+    analysis.best_bet = ev_result
+    analysis.ev_results = [ev_result]
+    from src.ev_calculator import KellyResult
+    analysis.kelly = KellyResult(kelly_full=5.0, kelly_half=2.5, stake_units=2.5, risk_level="Bajo")
+    return analysis
+
+
+def test_save_analysis_nba_sets_match_key(mock_db):
+    """Nuevo pick NBA queda con match_key poblado."""
+    analysis = _make_nba_analysis()
+    mock_db.save_analysis(analysis, sport="nba")
+
+    with mock_db._get_conn() as conn:
+        row = conn.execute("SELECT match_key FROM value_bets WHERE sport = 'nba'").fetchone()
+    assert row is not None
+    assert row["match_key"] == "Lakers|Celtics|2026-05-01T00:00:00Z|Over"
+
+
+def test_save_analysis_nba_upserts_duplicate(mock_db):
+    """Segunda llamada con el mismo partido no crea pick duplicado — actualiza el existente."""
+    analysis = _make_nba_analysis(odds=1.91)
+    mock_db.save_analysis(analysis, sport="nba")
+
+    analysis2 = _make_nba_analysis(odds=1.95)  # cuota distinta, mismo partido/selección
+    mock_db.save_analysis(analysis2, sport="nba")
+
+    with mock_db._get_conn() as conn:
+        rows = conn.execute("SELECT odds FROM value_bets WHERE sport = 'nba'").fetchall()
+    assert len(rows) == 1, f"Esperaba 1 pick, hay {len(rows)}"
+    assert rows[0]["odds"] == pytest.approx(1.95)  # actualizado con la segunda cuota
+
+
+def test_save_analysis_nba_does_not_overwrite_settled(mock_db):
+    """Si el pick ya tiene result != NULL, el UPSERT no lo sobreescribe."""
+    analysis = _make_nba_analysis(odds=1.91)
+    mock_db.save_analysis(analysis, sport="nba")
+
+    with mock_db._get_conn() as conn:
+        vb_id = conn.execute("SELECT id FROM value_bets WHERE sport = 'nba'").fetchone()[0]
+        conn.execute(
+            "UPDATE value_bets SET result = 'WIN', pnl_units = 4.55, settled_at = '2026-05-02T12:00:00' WHERE id = ?",
+            (vb_id,),
+        )
+        conn.commit()
+
+    analysis2 = _make_nba_analysis(odds=2.10)  # nueva cuota
+    mock_db.save_analysis(analysis2, sport="nba")
+
+    with mock_db._get_conn() as conn:
+        rows = conn.execute("SELECT odds, result FROM value_bets WHERE sport = 'nba'").fetchall()
+    assert len(rows) == 1
+    assert rows[0]["odds"] == pytest.approx(1.91)  # cuota original — no fue pisada
+    assert rows[0]["result"] == "WIN"
+
+
 def test_pending_results_cleared_after_recording(mock_db):
     """Tras registrar resultado, la bet ya no aparece como pendiente."""
     analysis = _make_analysis()
