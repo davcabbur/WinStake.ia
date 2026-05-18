@@ -25,7 +25,7 @@ def create_app() -> FastAPI:
     # Permitir CORS para el frontend (Angular usa 4200 por defecto)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:4200", "http://127.0.0.1:4200", "http://100.83.22.125:4200"],
+        allow_origins=["http://localhost:4200", "http://127.0.0.1:4200", "http://100.83.22.125:4200", "http://winstake-host:4200"],
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
