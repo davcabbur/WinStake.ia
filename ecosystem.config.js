@@ -70,7 +70,7 @@ module.exports = {
     {
       name: 'winstake-frontend',
       script: path.join(projectDir, 'frontend', 'node_modules', '@angular', 'cli', 'bin', 'ng.js'),
-      args: 'serve --host 0.0.0.0 --port 4200',
+      args: 'serve --host 0.0.0.0 --port 4200 --disable-host-check',
       cwd: path.join(projectDir, 'frontend'),
       interpreter: 'node',
       autorestart: true,
