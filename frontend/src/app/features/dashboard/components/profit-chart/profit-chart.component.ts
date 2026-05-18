@@ -5,6 +5,7 @@ import { LocaleCurrencyPipe } from '../../../../shared/pipes/locale-currency.pip
 
 type Period = '7d' | '30d' | '90d' | 'all';
 interface DataPoint { x: number; y: number; date: string; value: number; profit: number; selection: string; index: number; }
+interface Segment { x1: number; y1: number; x2: number; y2: number; color: string; }
 
 @Component({
   selector: 'app-profit-chart',
@@ -54,15 +55,19 @@ interface DataPoint { x: number; y: number; date: string; value: number; profit:
 
             <defs>
               <linearGradient id="profitGrad" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" [attr.stop-color]="isPositive ? '#10b981' : '#ef4444'" stop-opacity="0.3" />
-                <stop offset="100%" [attr.stop-color]="isPositive ? '#10b981' : '#ef4444'" stop-opacity="0.02" />
+                <stop offset="0%" stop-color="#6b7280" stop-opacity="0.12" />
+                <stop offset="100%" stop-color="#6b7280" stop-opacity="0.01" />
               </linearGradient>
             </defs>
 
             <path [attr.d]="areaPath" fill="url(#profitGrad)" />
-            <path [attr.d]="linePath" fill="none"
-              [attr.stroke]="isPositive ? '#10b981' : '#ef4444'"
-              stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+
+            <!-- Per-segment colored line: green if going up, red if going down -->
+            <line *ngFor="let s of segments"
+              [attr.x1]="s.x1" [attr.y1]="s.y1"
+              [attr.x2]="s.x2" [attr.y2]="s.y2"
+              [attr.stroke]="s.color"
+              stroke-width="2" stroke-linecap="round" />
 
             <!-- Hover indicator line -->
             <line *ngIf="tooltip"
@@ -194,6 +199,7 @@ export class ProfitChartComponent implements OnChanges {
   linePath = '';
   areaPath = '';
   dataPoints: DataPoint[] = [];
+  segments: Segment[] = [];
   gridLines: number[] = [];
   xLabels: string[] = [];
   zeroY = 100;
@@ -247,7 +253,7 @@ export class ProfitChartComponent implements OnChanges {
     const rawSelectAll   = (data.selections ?? []).slice(sliceStart);
 
     this.filteredEmpty = rawDates.length === 0;
-    if (this.filteredEmpty) { this.dataPoints = []; this.linePath = ''; this.areaPath = ''; return; }
+    if (this.filteredEmpty) { this.dataPoints = []; this.segments = []; this.linePath = ''; this.areaPath = ''; return; }
 
     // Single data point collapses to a dot — prepend a zero baseline so the line is visible
     const isSingle = rawDates.length === 1;
@@ -288,6 +294,32 @@ export class ProfitChartComponent implements OnChanges {
     const lastX  = this.dataPoints[n - 1].x;
     const firstX = this.dataPoints[0].x;
     this.areaPath = this.linePath + ` L ${lastX} ${this.zeroY} L ${firstX} ${this.zeroY} Z`;
+
+    this.segments = [];
+    for (let i = 0; i < this.dataPoints.length - 1; i++) {
+      const a = this.dataPoints[i];
+      const b = this.dataPoints[i + 1];
+      const v1 = a.value;
+      const v2 = b.value;
+
+      if (v1 >= 0 && v2 >= 0) {
+        this.segments.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, color: '#10b981' });
+      } else if (v1 < 0 && v2 < 0) {
+        this.segments.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, color: '#ef4444' });
+      } else if (v1 >= 0 && v2 < 0) {
+        // Positive → negative: split at zero crossing
+        const t = v1 / (v1 - v2);
+        const xc = a.x + t * (b.x - a.x);
+        this.segments.push({ x1: a.x,  y1: a.y,        x2: xc,  y2: this.zeroY, color: '#10b981' });
+        this.segments.push({ x1: xc,   y1: this.zeroY, x2: b.x, y2: b.y,        color: '#ef4444' });
+      } else {
+        // Negative → positive: split at zero crossing
+        const t = (-v1) / (v2 - v1);
+        const xc = a.x + t * (b.x - a.x);
+        this.segments.push({ x1: a.x,  y1: a.y,        x2: xc,  y2: this.zeroY, color: '#ef4444' });
+        this.segments.push({ x1: xc,   y1: this.zeroY, x2: b.x, y2: b.y,        color: '#10b981' });
+      }
+    }
 
     const step = Math.max(1, Math.floor(n / 6));
     this.xLabels = [];

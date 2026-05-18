@@ -98,12 +98,13 @@ def get_chart_data(sport: str = Query(default="nba")):
         cursor = conn.execute("""
             SELECT
                 mr.profit_units,
-                substr(mr.recorded_at, 1, 10) AS date,
+                DATE(a.commence_time) AS date,
                 vb.selection
             FROM match_results mr
             JOIN value_bets vb ON mr.value_bet_id = vb.id
+            JOIN analyses a ON vb.analysis_id = a.id
             WHERE vb.sport = ?
-            ORDER BY mr.recorded_at ASC
+            ORDER BY a.commence_time ASC, vb.id ASC
         """, (sport,))
 
         rows = cursor.fetchall()
