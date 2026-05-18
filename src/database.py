@@ -589,10 +589,10 @@ class Database:
 
             return [dict(row) for row in rows]
 
-    def get_recent_analyses(self, limit: int = 20) -> list[dict]:
-        """Obtiene los análisis más recientes."""
+    def get_recent_analyses(self, limit: int = 20, sport: str | None = None) -> list[dict]:
+        """Obtiene los análisis más recientes, opcionalmente filtrados por sport."""
         with self._get_conn() as conn:
-            rows = conn.execute("""
+            query = """
                 SELECT
                     a.*,
                     vb.selection as bet_selection,
@@ -600,10 +600,14 @@ class Database:
                     vb.stake_units as bet_stake
                 FROM analyses a
                 LEFT JOIN value_bets vb ON vb.analysis_id = a.id
-                ORDER BY a.run_date DESC
-                LIMIT ?
-            """, (limit,)).fetchall()
-
+            """
+            params: list = []
+            if sport is not None:
+                query += " WHERE vb.sport = ?"
+                params.append(sport)
+            query += " ORDER BY a.run_date DESC LIMIT ?"
+            params.append(limit)
+            rows = conn.execute(query, params).fetchall()
             return [dict(row) for row in rows]
 
     # ── Improvement 8: Line movement tracking ────────────────

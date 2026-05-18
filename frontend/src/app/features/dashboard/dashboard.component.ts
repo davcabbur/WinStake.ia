@@ -42,7 +42,10 @@ import { WebsocketService, OddsUpdate } from '../../core/services/websocket.serv
         </div>
         <app-history-table [history]="history" *ngIf="!loading"></app-history-table>
       </div>
-      <div class="live-column">
+      <!-- Live Odds widget oculto — el WS es mock, sin cuotas reales.
+           Reactivar cuando se implemente OddsClient en el WS.
+           Ver PENDING.md → "Implementar WS de cuotas reales" -->
+      <div class="live-column" *ngIf="false">
         <app-live-odds [data]="liveOddsData"></app-live-odds>
       </div>
     </div>

@@ -110,8 +110,7 @@ export class StatsCardsComponent implements OnChanges {
       this.wonBets = this.stats.won_bets || 0;
       this.winRate = this.stats.win_rate || 0;
       this.profit = this.stats.total_profit || 0;
-      // Rough ROI calculation assuming avg 1 unit staked per bet
-      this.roi = this.totalBets > 0 ? (this.profit / this.totalBets) * 100 : 0;
+      this.roi = this.stats.roi_pct ?? 0;
     }
   }
 }

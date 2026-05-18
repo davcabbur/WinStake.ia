@@ -2,50 +2,28 @@
 
 ## Próxima sesión
 
-### Consolidación de apps — FASE 2: switch a src.api.app
-- Cambiar run_api.py para servir `src.api.app` en lugar de `app.main:app`
-- `pm2 restart winstake-api`
-- Verificación inmediata desde browser: dashboard carga, WebSocket
-  conecta, engine-config funciona
-- Si algo falla: revert run_api.py + pm2 restart (30 segundos)
-- Estado actual: src.api.app tiene paridad completa (commit 17f8626)
+### FASE 3 — Borrar legacy app/api_v1/ (tras 2-3 días sin issues)
+- El switch a src.api.app está estable desde sesión 18/05
+- Tras confirmar que no hay regresiones, borrar:
+  - `app/api_v1/` entera
+  - `app/main.py` (si solo se usa para esta app)
+  - `tests/test_api_endpoints.py` (mockea app legacy, ya obsoleto)
+- Mantener `tests/test_api_auth.py` si sigue siendo útil contra src.api.app
 
-### Tras switch exitoso — fix ROI + filtro sport (código NO escrito)
-- **ATENCIÓN**: estos fixes NO están implementados todavía.
-  La sesión del 18/05 paró en GATE 1 al descubrir el problema
-  de las dos apps. El diff de routes.py que se commiteó es solo
-  la migración de endpoints, no los fixes de ROI ni de filtro.
-- Backend (por escribir): modificar /dashboard/stats en src/api/routes.py
-  para calcular roi_pct = pnl_units / stake_units * 100 sobre picks
-  paper cerrados (is_paper=1, result IN ('WIN','LOSS'))
-- Backend (por escribir): añadir WHERE vb.sport = ? (default 'nba')
-  en /dashboard/history para filtrar picks de LaLiga deshabilitada
-- Frontend (por escribir): leer roi_pct del backend en lugar de calcular
-  (profit / totalBets). Ver stats-cards.component.ts:114
-- Verificar contra BD real: curl /api/dashboard/stats?sport=nba
-  debe devolver roi_pct: -7.75%
+### Implementar WebSocket de cuotas reales
+- Actualmente `/api/ws/odds` emite datos mock hardcodeados (LaLiga ficticio)
+- Widget Live Odds oculto en dashboard hasta que se implemente
+  (`*ngIf="false"` en dashboard.component.ts)
+- Trabajo necesario:
+  - Integrar OddsClient en `src/api/websockets.py`
+  - Definir frecuencia de polling (cuota API limit 500/mes)
+  - Cache local con TTL para evitar re-llamadas
+  - Reactivar widget en dashboard.component.ts (quitar `*ngIf="false"`)
 
-### Tras switch — FASE 3: borrar legacy
-- Borrar app/api_v1/ del repo
-- Borrar tests obsoletos que apuntaban a app/ (test_api_auth.py,
-  test_api_endpoints.py si quedaron rotos)
-- Mantener tests que sigan siendo válidos
-
-### Dashboard - discrepancia de ROI
-- **Mostrado**: -34.8% (ROI Estimado en dashboard)
-- **Real**: -7.75% (calculado sobre stake apostado)
-- **Hipótesis**: el dashboard calcula sobre bankroll, no sobre stake
-- **Investigar**:
-  - Endpoint que sirve la métrica (probablemente /api/stats/overview)
-  - Fórmula exacta en el código
-  - Decidir si mostrar ambas métricas o solo ROI sobre stake
-
-### Dashboard - filtrar solo NBA
-- En el historial aparecen picks LaLiga (Getafe vs Mallorca)
-- LaLiga está deshabilitada desde commit 11fd25b
-- El dashboard debería filtrar por sport='nba' o por is_paper=1
-  AND sport='nba'
-- O añadir selector de sport en el frontend
+### Validar dashboard end-to-end por unas semanas
+- Ahora todo funciona: ROI -7.75% correcto, filtro NBA, engine-config
+- Antes de añadir features nuevas (V1-V5), usarlo unos días y ver
+  si emerge algún bug nuevo o decisión a tomar
 
 ## Pulidos infraestructura
 

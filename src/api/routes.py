@@ -66,26 +66,26 @@ def get_dashboard_stats(sport: str = Query(default="nba")) -> dict:
         conn.close()
 
 @router.get("/dashboard/history")
-def get_bet_history(limit: int = 50, offset: int = 0):
+def get_bet_history(limit: int = 50, offset: int = 0, sport: str = Query(default="nba")):
     """Devuelve el historial de apuestas y análisis."""
     conn = get_db_connection()
     try:
-        # Hacemos JOIN de analyses y value_bets
         cursor = conn.execute("""
-            SELECT 
+            SELECT
                 a.run_date, a.home_team, a.away_team, a.commence_time,
                 vb.selection, vb.odds, vb.ev_percent, vb.confidence, vb.stake_units,
                 mr.bet_won, mr.profit_units
             FROM value_bets vb
             JOIN analyses a ON vb.analysis_id = a.id
             LEFT JOIN match_results mr ON vb.id = mr.value_bet_id
+            WHERE vb.sport = ?
             ORDER BY a.run_date DESC
             LIMIT ? OFFSET ?
-        """, (limit, offset))
-        
+        """, (sport, limit, offset))
+
         rows = cursor.fetchall()
         history = [dict(row) for row in rows]
-        
+
         return {"data": history, "limit": limit, "offset": offset}
     finally:
         conn.close()
@@ -135,10 +135,10 @@ def update_engine_config(config: EngineConfigIn):
 
 
 @router.get("/dashboard/analysis-results")
-def get_latest_analysis() -> dict:
+def get_latest_analysis(sport: str = Query(default="nba")) -> dict:
     """Últimos 30 análisis con sus value bets asociadas."""
     db = Database()
-    analyses = db.get_recent_analyses(limit=30)
+    analyses = db.get_recent_analyses(limit=30, sport=sport)
     results = []
     for a in analyses:
         results.append({
@@ -172,7 +172,7 @@ def get_stats_by_selection() -> dict:
 
 @router.get("/v1/analysis/")
 def run_analysis(
-    sport: str = Query("laliga", description="Deporte a analizar", enum=list(SPORTS.keys())),
+    sport: str = Query("nba", description="Deporte a analizar", enum=list(SPORTS.keys())),
 ) -> dict:
     """Ejecuta el análisis en vivo y devuelve las value bets encontradas."""
     try:

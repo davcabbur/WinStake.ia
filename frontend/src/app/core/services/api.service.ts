@@ -5,10 +5,13 @@ import { Observable } from 'rxjs';
 // ── Dashboard Models ──
 
 export interface DashboardStats {
+  sport: string;
   total_bets: number;
   won_bets: number;
   win_rate: number;
+  total_staked: number;
   total_profit: number;
+  roi_pct: number;
 }
 
 export interface BetHistory {
@@ -127,8 +130,9 @@ export class ApiService {
 
   // ── Analysis engine endpoint ──
 
+  // Hardcoded NBA for now — when adding sport selector UI, replace with selectedSport
   runAnalysis(): Observable<AnalysisResponse> {
-    return this.http.get<AnalysisResponse>(`${this.baseUrl}/api/v1/analysis/`);
+    return this.http.get<AnalysisResponse>(`${this.baseUrl}/api/v1/analysis/?sport=nba`);
   }
 
   // ── Engine settings ──
