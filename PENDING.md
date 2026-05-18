@@ -41,9 +41,9 @@
 - **Tailscale como servicio Windows**: hoy arranca con sesión de usuario,
   no como servicio del sistema. Si Windows reinicia y queda en login screen,
   acceso remoto roto. Solución: `tailscale.exe service install` (requiere admin)
-- **MagicDNS**: ya activado en admin console. Probar
-  http://winstake-host:4200 desde dispositivos Tailscale.
-  Si funciona, usar siempre el nombre en vez de la IP
+- **MagicDNS**: ✓ resuelto (sesión 18/05). Acceso vía
+  http://winstake-host:4200 funciona. CORS incluye el hostname,
+  ng serve corre con --disable-host-check
 - **reload=False en producción**: uvicorn corre con `reload=True` en
   run_api.py. Cambiar a `reload=False` cuando se estabilice el desarrollo
   activo (evita StatReload race conditions al guardar archivos)
