@@ -2,6 +2,30 @@
 
 ## Próxima sesión
 
+### Consolidación de apps — FASE 2: switch a src.api.app
+- Cambiar run_api.py para servir `src.api.app` en lugar de `app.main:app`
+- `pm2 restart winstake-api`
+- Verificación inmediata desde browser: dashboard carga, WebSocket
+  conecta, engine-config funciona
+- Si algo falla: revert run_api.py + pm2 restart (30 segundos)
+- Estado actual: src.api.app tiene paridad completa (commit 17f8626)
+
+### Tras switch exitoso — fix ROI + filtro sport
+- Backend: src/api/routes.py ya tiene el nuevo /dashboard/stats
+  (sport param, roi_pct calculado sobre stake). Estaba listo pero
+  apuntaba a la app dormida. Tras el switch, entra en producción.
+- Frontend: leer roi_pct del backend en lugar de calcular con
+  (profit / totalBets). Ver stats-cards.component.ts:114
+- Verificar contra BD real: roi_pct debe ser -7.75%
+- Historia: añadir WHERE vb.sport = ? (default 'nba') en /dashboard/history
+  para filtrar picks de LaLiga deshabilitada
+
+### Tras switch — FASE 3: borrar legacy
+- Borrar app/api_v1/ del repo
+- Borrar tests obsoletos que apuntaban a app/ (test_api_auth.py,
+  test_api_endpoints.py si quedaron rotos)
+- Mantener tests que sigan siendo válidos
+
 ### Dashboard - discrepancia de ROI
 - **Mostrado**: -34.8% (ROI Estimado en dashboard)
 - **Real**: -7.75% (calculado sobre stake apostado)
