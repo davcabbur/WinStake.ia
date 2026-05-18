@@ -176,7 +176,9 @@ export class ProfitChartComponent implements OnChanges {
 
   private buildChart() {
     const data = this.chartData!;
-    const values = data.cumulative_profit;
+    // Single data point collapses to a dot — prepend a zero baseline so the line is visible
+    const dates  = data.dates.length === 1 ? ['Inicio', ...data.dates]            : data.dates;
+    const values = data.dates.length === 1 ? [0, ...data.cumulative_profit]       : data.cumulative_profit;
     const n = values.length;
 
     this.minVal = Math.min(0, ...values);
@@ -195,7 +197,7 @@ export class ProfitChartComponent implements OnChanges {
     this.dataPoints = values.map((val, i) => ({
       x: this.padding + (i / (n - 1 || 1)) * chartW,
       y: this.padding + ((this.maxVal - val) / range) * chartH,
-      date: data.dates[i],
+      date: dates[i],
       value: val,
     }));
 
@@ -206,9 +208,10 @@ export class ProfitChartComponent implements OnChanges {
 
     const step = Math.max(1, Math.floor(n / 6));
     this.xLabels = [];
-    for (let i = 0; i < n; i += step) this.xLabels.push(data.dates[i].substring(5));
-    const last = data.dates[n - 1].substring(5);
-    if (this.xLabels[this.xLabels.length - 1] !== last) this.xLabels.push(last);
+    for (let i = 0; i < n; i += step) this.xLabels.push(dates[i].length > 5 ? dates[i].substring(5) : dates[i]);
+    const last = dates[n - 1];
+    const lastLabel = last.length > 5 ? last.substring(5) : last;
+    if (this.xLabels[this.xLabels.length - 1] !== lastLabel) this.xLabels.push(lastLabel);
   }
 
   onMouseMove(event: MouseEvent) {
