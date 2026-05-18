@@ -31,6 +31,8 @@ export interface BetHistory {
 export interface ChartData {
   dates: string[];
   cumulative_profit: number[];
+  profits: number[];
+  selections: string[];
 }
 
 // ── Analysis Models ──

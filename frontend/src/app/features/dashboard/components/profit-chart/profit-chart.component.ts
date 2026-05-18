@@ -3,7 +3,7 @@ import { CommonModule } from '@angular/common';
 import { ChartData } from '../../../../core/services/api.service';
 import { LocaleCurrencyPipe } from '../../../../shared/pipes/locale-currency.pipe';
 
-interface DataPoint { x: number; y: number; date: string; value: number; }
+interface DataPoint { x: number; y: number; date: string; value: number; profit: number; selection: string; index: number; }
 
 @Component({
   selector: 'app-profit-chart',
@@ -78,9 +78,13 @@ interface DataPoint { x: number; y: number; date: string; value: number; }
           <div class="tooltip" *ngIf="tooltip"
             [style.left.px]="tooltipX"
             [style.top.px]="0">
-            <div class="tooltip-date">{{ tooltip.date }}</div>
+            <div class="tooltip-index">#{{ tooltip.index }} · {{ tooltip.date }}</div>
+            <div class="tooltip-selection">{{ tooltip.selection }}</div>
+            <div class="tooltip-profit" [class.positive]="tooltip.profit >= 0" [class.negative]="tooltip.profit < 0">
+              {{ tooltip.profit >= 0 ? '+' : '' }}{{ tooltip.profit | localeCurrency:2:2:true }}
+            </div>
             <div class="tooltip-value" [class.positive]="tooltip.value >= 0" [class.negative]="tooltip.value < 0">
-              {{ tooltip.value | localeCurrency:2:2:true }}
+              Acum: {{ tooltip.value | localeCurrency:2:2:true }}
             </div>
           </div>
         </div>
@@ -141,8 +145,12 @@ interface DataPoint { x: number; y: number; date: string; value: number; }
       box-shadow: 0 4px 12px rgba(0,0,0,0.3);
       z-index: 10;
     }
-    .tooltip-date { font-size: 11px; color: var(--text-secondary); margin-bottom: 2px; }
-    .tooltip-value { font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--text-primary); }
+    .tooltip-index { font-size: 11px; color: var(--text-secondary); margin-bottom: 2px; }
+    .tooltip-selection { font-size: 12px; color: var(--text-primary); margin-bottom: 4px; }
+    .tooltip-profit { font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .tooltip-profit.positive { color: var(--status-success-text); }
+    .tooltip-profit.negative { color: var(--status-error-text); }
+    .tooltip-value { font-size: 12px; color: var(--text-secondary); margin-top: 2px; font-variant-numeric: tabular-nums; }
     .tooltip-value.positive { color: var(--status-success-text); }
     .tooltip-value.negative { color: var(--status-error-text); }
 
@@ -167,7 +175,7 @@ export class ProfitChartComponent implements OnChanges {
   maxVal = 0;
   midVal = 0;
 
-  tooltip: { x: number; y: number; date: string; value: number } | null = null;
+  tooltip: { x: number; y: number; date: string; value: number; profit: number; selection: string; index: number } | null = null;
   tooltipX = 0;
 
   ngOnChanges() {
@@ -194,11 +202,17 @@ export class ProfitChartComponent implements OnChanges {
 
     this.gridLines = [0, 1, 2, 3, 4].map(i => this.padding + (i / 4) * chartH);
 
+    const rawProfits   = data.dates.length === 1 ? [0, ...(data.profits    ?? [])] : (data.profits    ?? values.map(() => 0));
+    const rawSelections = data.dates.length === 1 ? ['', ...(data.selections ?? [])] : (data.selections ?? values.map(() => ''));
+
     this.dataPoints = values.map((val, i) => ({
       x: this.padding + (i / (n - 1 || 1)) * chartW,
       y: this.padding + ((this.maxVal - val) / range) * chartH,
       date: dates[i],
       value: val,
+      profit: rawProfits[i] ?? 0,
+      selection: rawSelections[i] ?? '',
+      index: i,
     }));
 
     this.linePath = this.dataPoints.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
@@ -228,7 +242,7 @@ export class ProfitChartComponent implements OnChanges {
       if (d < minDist) { minDist = d; nearest = p; }
     }
 
-    this.tooltip = { x: nearest.x, y: nearest.y, date: nearest.date, value: nearest.value };
+    this.tooltip = { x: nearest.x, y: nearest.y, date: nearest.date, value: nearest.value, profit: nearest.profit, selection: nearest.selection, index: nearest.index };
     // Convert SVG X to pixel X for the div tooltip
     this.tooltipX = (nearest.x / this.svgWidth) * rect.width;
   }

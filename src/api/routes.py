@@ -91,30 +91,38 @@ def get_bet_history(limit: int = 50, offset: int = 0, sport: str = Query(default
         conn.close()
 
 @router.get("/dashboard/chart-data")
-def get_chart_data():
-    """Devuelve datos de evolución del Bankroll/Profit por fecha."""
+def get_chart_data(sport: str = Query(default="nba")):
+    """Devuelve un punto por apuesta liquidada para la curva de beneficio."""
     conn = get_db_connection()
     try:
         cursor = conn.execute("""
-            SELECT 
-                substr(recorded_at, 1, 10) as date,
-                SUM(profit_units) as daily_profit
-            FROM match_results
-            GROUP BY substr(recorded_at, 1, 10)
-            ORDER BY date ASC
-        """)
-        
+            SELECT
+                mr.profit_units,
+                substr(mr.recorded_at, 1, 10) AS date,
+                vb.selection
+            FROM match_results mr
+            JOIN value_bets vb ON mr.value_bet_id = vb.id
+            WHERE vb.sport = ?
+            ORDER BY mr.recorded_at ASC
+        """, (sport,))
+
         rows = cursor.fetchall()
-        dates = []
-        profits = []
+        dates, cumulative_profit, profits, selections = [], [], [], []
         cumulative = 0.0
-        
+
         for row in rows:
+            cumulative += row["profit_units"]
             dates.append(row["date"])
-            cumulative += row["daily_profit"]
-            profits.append(round(cumulative, 2))
-            
-        return {"dates": dates, "cumulative_profit": profits}
+            profits.append(round(row["profit_units"], 2))
+            cumulative_profit.append(round(cumulative, 2))
+            selections.append(row["selection"])
+
+        return {
+            "dates": dates,
+            "cumulative_profit": cumulative_profit,
+            "profits": profits,
+            "selections": selections,
+        }
     finally:
         conn.close()
 
