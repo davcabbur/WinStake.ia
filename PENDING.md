@@ -10,15 +10,20 @@
 - Si algo falla: revert run_api.py + pm2 restart (30 segundos)
 - Estado actual: src.api.app tiene paridad completa (commit 17f8626)
 
-### Tras switch exitoso — fix ROI + filtro sport
-- Backend: src/api/routes.py ya tiene el nuevo /dashboard/stats
-  (sport param, roi_pct calculado sobre stake). Estaba listo pero
-  apuntaba a la app dormida. Tras el switch, entra en producción.
-- Frontend: leer roi_pct del backend en lugar de calcular con
+### Tras switch exitoso — fix ROI + filtro sport (código NO escrito)
+- **ATENCIÓN**: estos fixes NO están implementados todavía.
+  La sesión del 18/05 paró en GATE 1 al descubrir el problema
+  de las dos apps. El diff de routes.py que se commiteó es solo
+  la migración de endpoints, no los fixes de ROI ni de filtro.
+- Backend (por escribir): modificar /dashboard/stats en src/api/routes.py
+  para calcular roi_pct = pnl_units / stake_units * 100 sobre picks
+  paper cerrados (is_paper=1, result IN ('WIN','LOSS'))
+- Backend (por escribir): añadir WHERE vb.sport = ? (default 'nba')
+  en /dashboard/history para filtrar picks de LaLiga deshabilitada
+- Frontend (por escribir): leer roi_pct del backend en lugar de calcular
   (profit / totalBets). Ver stats-cards.component.ts:114
-- Verificar contra BD real: roi_pct debe ser -7.75%
-- Historia: añadir WHERE vb.sport = ? (default 'nba') en /dashboard/history
-  para filtrar picks de LaLiga deshabilitada
+- Verificar contra BD real: curl /api/dashboard/stats?sport=nba
+  debe devolver roi_pct: -7.75%
 
 ### Tras switch — FASE 3: borrar legacy
 - Borrar app/api_v1/ del repo
