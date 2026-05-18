@@ -3,6 +3,7 @@ import { CommonModule } from '@angular/common';
 import { ChartData } from '../../../../core/services/api.service';
 import { LocaleCurrencyPipe } from '../../../../shared/pipes/locale-currency.pipe';
 
+type Period = '7d' | '30d' | '90d' | 'all';
 interface DataPoint { x: number; y: number; date: string; value: number; profit: number; selection: string; index: number; }
 
 @Component({
@@ -13,15 +14,23 @@ interface DataPoint { x: number; y: number; date: string; value: number; profit:
     <div class="glass-card chart-container">
       <div class="chart-header">
         <h2>Curva de Beneficio</h2>
-        <div class="chart-legend" *ngIf="chartData && chartData.dates.length > 0">
-          <span class="legend-item">
-            <span class="legend-dot" [style.background]="isPositive ? '#10b981' : '#ef4444'"></span>
-            Profit acumulado
-          </span>
+        <div class="chart-controls">
+          <div class="chart-filters">
+            <button *ngFor="let p of periods"
+              class="filter-btn"
+              [class.active]="selectedPeriod === p.key"
+              (click)="setPeriod(p.key)">{{ p.label }}</button>
+          </div>
+          <div class="chart-legend" *ngIf="chartData && chartData.dates.length > 0">
+            <span class="legend-item">
+              <span class="legend-dot" [style.background]="isPositive ? '#10b981' : '#ef4444'"></span>
+              Profit acumulado
+            </span>
+          </div>
         </div>
       </div>
 
-      <div class="chart-body" *ngIf="chartData && chartData.dates.length > 0">
+      <div class="chart-body" *ngIf="chartData && chartData.dates.length > 0 && !filteredEmpty">
 
         <!-- Y-axis labels -->
         <div class="y-axis">
@@ -80,10 +89,10 @@ interface DataPoint { x: number; y: number; date: string; value: number; profit:
             [style.top.px]="0">
             <div class="tooltip-index">#{{ tooltip.index }} · {{ tooltip.date }}</div>
             <div class="tooltip-selection">{{ tooltip.selection }}</div>
-            <div class="tooltip-profit" [class.positive]="tooltip.profit >= 0" [class.negative]="tooltip.profit < 0">
-              {{ tooltip.profit >= 0 ? '+' : '' }}{{ tooltip.profit | localeCurrency:2:2:true }}
+            <div class="tooltip-profit" [class.positive]="!isNeg(tooltip.profit)" [class.negative]="isNeg(tooltip.profit)">
+              {{ !isNeg(tooltip.profit) ? '+' : '' }}{{ tooltip.profit | localeCurrency:2:2:true }}
             </div>
-            <div class="tooltip-value" [class.positive]="tooltip.value >= 0" [class.negative]="tooltip.value < 0">
+            <div class="tooltip-value" [class.positive]="!isNeg(tooltip.value)" [class.negative]="isNeg(tooltip.value)">
               Acum: {{ tooltip.value | localeCurrency:2:2:true }}
             </div>
           </div>
@@ -95,6 +104,10 @@ interface DataPoint { x: number; y: number; date: string; value: number; profit:
         </div>
       </div>
 
+      <div class="empty-state" *ngIf="filteredEmpty && chartData && chartData.dates.length > 0">
+        <p>Sin apuestas en el período seleccionado.</p>
+      </div>
+
       <div class="empty-state" *ngIf="!chartData || chartData.dates.length === 0">
         <p>Sin datos de rendimiento aun. Ejecuta analisis y registra resultados para ver la curva.</p>
       </div>
@@ -103,6 +116,20 @@ interface DataPoint { x: number; y: number; date: string; value: number; profit:
   styles: [`
     .chart-container { margin-bottom: 32px; }
     .chart-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+    .chart-controls { display: flex; align-items: center; gap: 16px; }
+    .chart-filters { display: flex; gap: 4px; }
+    .filter-btn {
+      padding: 3px 10px;
+      font-size: 11px;
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      background: transparent;
+      color: var(--text-secondary);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .filter-btn:hover { color: var(--text-primary); border-color: var(--text-secondary); }
+    .filter-btn.active { background: var(--accent-color, #6366f1); color: #fff; border-color: transparent; }
     .chart-legend { display: flex; gap: 16px; }
     .legend-item { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); }
     .legend-dot { width: 8px; height: 8px; border-radius: 50%; }
@@ -171,9 +198,18 @@ export class ProfitChartComponent implements OnChanges {
   xLabels: string[] = [];
   zeroY = 100;
   isPositive = true;
+  filteredEmpty = false;
   minVal = 0;
   maxVal = 0;
   midVal = 0;
+
+  selectedPeriod: Period = 'all';
+  readonly periods: { key: Period; label: string }[] = [
+    { key: '7d',  label: '7D'  },
+    { key: '30d', label: '30D' },
+    { key: '90d', label: '3M'  },
+    { key: 'all', label: 'Todo' },
+  ];
 
   tooltip: { x: number; y: number; date: string; value: number; profit: number; selection: string; index: number } | null = null;
   tooltipX = 0;
@@ -182,41 +218,74 @@ export class ProfitChartComponent implements OnChanges {
     if (this.chartData && this.chartData.dates.length > 0) this.buildChart();
   }
 
+  setPeriod(p: Period) {
+    this.selectedPeriod = p;
+    if (this.chartData && this.chartData.dates.length > 0) this.buildChart();
+  }
+
+  isNeg(val: number): boolean {
+    return val < 0 || Object.is(val, -0);
+  }
+
   private buildChart() {
     const data = this.chartData!;
+
+    // Time filter: find the slice start index based on selected period
+    let sliceStart = 0;
+    if (this.selectedPeriod !== 'all') {
+      const days = ({ '7d': 7, '30d': 30, '90d': 90 } as Record<string, number>)[this.selectedPeriod];
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - days);
+      const cutoffStr = cutoff.toISOString().substring(0, 10);
+      const idx = data.dates.findIndex(d => d >= cutoffStr);
+      sliceStart = idx === -1 ? data.dates.length : idx;
+    }
+
+    const rawDates       = data.dates.slice(sliceStart);
+    const rawValues      = data.cumulative_profit.slice(sliceStart);
+    const rawProfitsAll  = (data.profits    ?? []).slice(sliceStart);
+    const rawSelectAll   = (data.selections ?? []).slice(sliceStart);
+
+    this.filteredEmpty = rawDates.length === 0;
+    if (this.filteredEmpty) { this.dataPoints = []; this.linePath = ''; this.areaPath = ''; return; }
+
     // Single data point collapses to a dot — prepend a zero baseline so the line is visible
-    const dates  = data.dates.length === 1 ? ['Inicio', ...data.dates]            : data.dates;
-    const values = data.dates.length === 1 ? [0, ...data.cumulative_profit]       : data.cumulative_profit;
+    const isSingle = rawDates.length === 1;
+    const dates          = isSingle ? ['Inicio', ...rawDates]      : rawDates;
+    const values         = isSingle ? [0,         ...rawValues]    : rawValues;
+    const rawProfits     = isSingle ? [0,         ...rawProfitsAll]: rawProfitsAll;
+    const rawSelections  = isSingle ? ['',        ...rawSelectAll] : rawSelectAll;
     const n = values.length;
 
     this.minVal = Math.min(0, ...values);
     this.maxVal = Math.max(0, ...values);
     this.midVal = Math.round((this.minVal + this.maxVal) / 2);
 
-    const range = this.maxVal - this.minVal || 1;
-    const chartW = this.svgWidth - this.padding * 2;
+    const range  = this.maxVal - this.minVal || 1;
+    const chartW = this.svgWidth  - this.padding * 2;
     const chartH = this.svgHeight - this.padding * 2;
 
-    this.isPositive = values[values.length - 1] >= 0;
+    this.isPositive = !this.isNeg(values[values.length - 1]);
     this.zeroY = this.padding + ((this.maxVal - 0) / range) * chartH;
 
     this.gridLines = [0, 1, 2, 3, 4].map(i => this.padding + (i / 4) * chartH);
 
-    const rawProfits   = data.dates.length === 1 ? [0, ...(data.profits    ?? [])] : (data.profits    ?? values.map(() => 0));
-    const rawSelections = data.dates.length === 1 ? ['', ...(data.selections ?? [])] : (data.selections ?? values.map(() => ''));
-
-    this.dataPoints = values.map((val, i) => ({
-      x: this.padding + (i / (n - 1 || 1)) * chartW,
-      y: this.padding + ((this.maxVal - val) / range) * chartH,
-      date: dates[i],
-      value: val,
-      profit: rawProfits[i] ?? 0,
-      selection: rawSelections[i] ?? '',
-      index: i,
-    }));
+    this.dataPoints = values.map((val, i) => {
+      const isSynth = isSingle && i === 0;
+      return {
+        x: this.padding + (i / (n - 1 || 1)) * chartW,
+        y: this.padding + ((this.maxVal - val) / range) * chartH,
+        date: dates[i],
+        value: val,
+        profit: rawProfits[i]    ?? 0,
+        selection: rawSelections[i] ?? '',
+        // global 1-based bet number; synthetic baseline = 0
+        index: isSynth ? 0 : sliceStart + (isSingle ? i : i + 1),
+      };
+    });
 
     this.linePath = this.dataPoints.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
-    const lastX = this.dataPoints[n - 1].x;
+    const lastX  = this.dataPoints[n - 1].x;
     const firstX = this.dataPoints[0].x;
     this.areaPath = this.linePath + ` L ${lastX} ${this.zeroY} L ${firstX} ${this.zeroY} Z`;
 
@@ -231,10 +300,9 @@ export class ProfitChartComponent implements OnChanges {
   onMouseMove(event: MouseEvent) {
     if (!this.dataPoints.length) return;
     const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
-    const relX = event.clientX - rect.left;
+    const relX   = event.clientX - rect.left;
     const svgRelX = (relX / rect.width) * this.svgWidth;
 
-    // Find nearest data point
     let nearest = this.dataPoints[0];
     let minDist = Math.abs(svgRelX - nearest.x);
     for (const p of this.dataPoints) {
@@ -243,7 +311,6 @@ export class ProfitChartComponent implements OnChanges {
     }
 
     this.tooltip = { x: nearest.x, y: nearest.y, date: nearest.date, value: nearest.value, profit: nearest.profit, selection: nearest.selection, index: nearest.index };
-    // Convert SVG X to pixel X for the div tooltip
     this.tooltipX = (nearest.x / this.svgWidth) * rect.width;
   }
 }
