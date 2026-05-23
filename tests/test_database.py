@@ -63,6 +63,7 @@ def test_database_initialization(mock_db):
     assert "analyses" in tables
     assert "value_bets" in tables
     assert "match_results" in tables
+    assert "match_outcomes" in tables
 
 
 def test_migrations_idempotent(tmp_path):
@@ -419,3 +420,76 @@ def test_save_analysis_legacy_bookmaker_no_bet365_data(mock_db):
         ).fetchone()
 
     assert row["bookmaker"] == "trimmed_avg"
+
+
+# ── match_outcomes (game-centric schema) ──────────────────
+
+def test_match_outcomes_schema(mock_db):
+    """match_outcomes tiene el schema game-centric correcto."""
+    with mock_db._get_conn() as conn:
+        cols = [row[1] for row in conn.execute("PRAGMA table_info(match_outcomes)").fetchall()]
+    assert "home_team" in cols
+    assert "away_team" in cols
+    assert "game_date" in cols
+    assert "home_score" in cols
+    assert "away_score" in cols
+    assert "winner" in cols
+    assert "analysis_id" not in cols
+
+
+def test_match_outcomes_insert_and_dedup(mock_db):
+    """INSERT OR IGNORE respeta UNIQUE(home_team, away_team, game_date)."""
+    with mock_db._get_conn() as conn:
+        conn.execute("""
+            INSERT INTO match_outcomes
+                (home_team, away_team, game_date, home_score, away_score,
+                 total_score, winner, fetched_at, source)
+            VALUES ('Lakers', 'Celtics', '2026-04-07', 110, 105, 215,
+                    'home', '2026-05-24T00:00:00Z', 'test')
+        """)
+        conn.commit()
+        # Segunda inserción con mismo partido → debe ser ignorada
+        conn.execute("""
+            INSERT OR IGNORE INTO match_outcomes
+                (home_team, away_team, game_date, home_score, away_score,
+                 total_score, winner, fetched_at, source)
+            VALUES ('Lakers', 'Celtics', '2026-04-07', 999, 999, 1998,
+                    'away', '2026-05-24T00:00:00Z', 'test')
+        """)
+        conn.commit()
+        rows = conn.execute(
+            "SELECT * FROM match_outcomes WHERE home_team='Lakers'"
+        ).fetchall()
+
+    assert len(rows) == 1
+    assert rows[0]["home_score"] == 110
+
+
+def test_match_outcomes_join_with_analyses(mock_db):
+    """match_outcomes se puede enlazar con analyses por (home_team, away_team, DATE(commence_time))."""
+    analysis = _make_analysis(home="Golden State Warriors", away="Phoenix Suns", has_value=False)
+    analysis.commence_time = "2026-04-10T00:00:00Z"
+    mock_db.save_analysis(analysis, sport="nba")
+
+    with mock_db._get_conn() as conn:
+        conn.execute("""
+            INSERT INTO match_outcomes
+                (home_team, away_team, game_date, home_score, away_score,
+                 total_score, winner, fetched_at, source)
+            VALUES ('Golden State Warriors', 'Phoenix Suns', '2026-04-10',
+                    120, 115, 235, 'home', '2026-05-24T00:00:00Z', 'test')
+        """)
+        conn.commit()
+        row = conn.execute("""
+            SELECT a.home_team, mo.home_score, mo.winner
+            FROM analyses a
+            JOIN match_outcomes mo
+               ON mo.home_team = a.home_team
+              AND mo.away_team = a.away_team
+              AND mo.game_date = DATE(a.commence_time)
+            WHERE a.home_team = 'Golden State Warriors'
+        """).fetchone()
+
+    assert row is not None
+    assert row["home_score"] == 120
+    assert row["winner"] == "home"

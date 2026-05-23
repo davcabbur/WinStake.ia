@@ -118,6 +118,23 @@ class Database:
                     key   TEXT PRIMARY KEY,
                     value TEXT NOT NULL
                 );
+
+                -- Resultado real de cada partido (1 fila por partido, independiente
+                -- del número de análisis generados para ese partido)
+                CREATE TABLE IF NOT EXISTS match_outcomes (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    home_team   TEXT NOT NULL,
+                    away_team   TEXT NOT NULL,
+                    game_date   TEXT NOT NULL,
+                    home_score  INTEGER,
+                    away_score  INTEGER,
+                    total_score INTEGER,
+                    winner      TEXT,
+                    fetched_at  TEXT NOT NULL,
+                    source      TEXT NOT NULL,
+                    UNIQUE(home_team, away_team, game_date)
+                );
+                -- índice creado en _run_migrations tras garantizar schema correcto
             """)
 
             # Migraciones idempotentes (sport, line, paper trading…)
@@ -178,6 +195,48 @@ class Database:
                 WHERE a.id = value_bets.analysis_id
             )
             WHERE match_key IS NULL AND sport = 'nba'
+        """)
+
+        # ── match_outcomes: migración a schema game-centric ─────
+        # Si la tabla tiene analysis_id (schema viejo), migrar a home_team/away_team/game_date
+        cols_mo = [row[1] for row in conn.execute("PRAGMA table_info(match_outcomes)").fetchall()]
+        if cols_mo and "analysis_id" in cols_mo and "home_team" not in cols_mo:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS match_outcomes_new (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    home_team   TEXT NOT NULL,
+                    away_team   TEXT NOT NULL,
+                    game_date   TEXT NOT NULL,
+                    home_score  INTEGER,
+                    away_score  INTEGER,
+                    total_score INTEGER,
+                    winner      TEXT,
+                    fetched_at  TEXT NOT NULL,
+                    source      TEXT NOT NULL,
+                    UNIQUE(home_team, away_team, game_date)
+                )
+            """)
+            conn.execute("""
+                INSERT OR IGNORE INTO match_outcomes_new
+                    (home_team, away_team, game_date, home_score, away_score,
+                     total_score, winner, fetched_at, source)
+                SELECT a.home_team, a.away_team, DATE(a.commence_time),
+                       mo.home_score, mo.away_score, mo.total_score, mo.winner,
+                       mo.fetched_at, mo.source
+                FROM match_outcomes mo
+                JOIN analyses a ON a.id = mo.analysis_id
+            """)
+            conn.execute("DROP TABLE match_outcomes")
+            conn.execute("ALTER TABLE match_outcomes_new RENAME TO match_outcomes")
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_match_outcomes_game
+                ON match_outcomes(home_team, away_team, game_date)
+            """)
+            logger.info("Migracion: match_outcomes rediseniada a schema game-centric (54 partidos unicos)")
+        # Índice idempotente — válido tanto para BD migrada como para BD nueva
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_match_outcomes_game
+            ON match_outcomes(home_team, away_team, game_date)
         """)
 
         # Índices (idempotentes)
