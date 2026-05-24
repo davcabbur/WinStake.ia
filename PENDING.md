@@ -40,12 +40,12 @@
 - V5: Análisis A vs B (modelo A auto-track vs modelo B con tus decisiones)
 
 ## 5. Pulidos infraestructura
-- **Tailscale como servicio Windows**: hoy arranca con sesión de usuario,
-  no como servicio del sistema. Si Windows reinicia y queda en login screen,
-  acceso remoto roto. Solución: `tailscale.exe service install` (requiere admin)
 - **MagicDNS**: ✓ resuelto (sesión 18/05). Acceso vía
   http://winstake-host:4200 funciona. CORS incluye el hostname,
   ng serve corre con --disable-host-check
+- **Tailscale**: ✓ resuelto (24/05). Servicio `Automatic`, arranca con
+  Windows sin necesidad de login de usuario. `winstake-host` + `iphone-15`
+  visibles en tailnet.
 - **reload=False en producción**: uvicorn corre con `reload=True` en
   run_api.py. Cambiar a `reload=False` cuando se estabilice el desarrollo
   activo (evita StatReload race conditions al guardar archivos)
@@ -56,5 +56,6 @@
 - 17/05: FIX 2 — nba_resolver persiste pnl_units + dedup NBA picks
 - 18/05: FASE 2 — switch a src.api.app + fix ROI dashboard
 - 18-20/05: Chart curva beneficio + CORS + MagicDNS
-- 24/05 mañana: Bloque C — settle daemon persiste outcomes de TODOS los análisis NBA
-- 24/05 tarde: FASE 3 — eliminado app/ legacy + tests asociados
+- 24/05: Bloque C — settle daemon persiste outcomes de TODOS los análisis NBA (sin sesgo de selector)
+- 24/05: FASE 3 — eliminado app/ legacy y tests asociados
+- 24/05: Tailscale — confirmado como servicio Automatic, acceso remoto garantizado
