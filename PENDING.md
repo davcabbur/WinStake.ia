@@ -46,9 +46,8 @@
 - **Tailscale**: ✓ resuelto (24/05). Servicio `Automatic`, arranca con
   Windows sin necesidad de login de usuario. `winstake-host` + `iphone-15`
   visibles en tailnet.
-- **reload=False en producción**: uvicorn corre con `reload=True` en
-  run_api.py. Cambiar a `reload=False` cuando se estabilice el desarrollo
-  activo (evita StatReload race conditions al guardar archivos)
+- **reload=False**: ✓ resuelto (24/05). uvicorn corre sin watcher de
+  ficheros. PM2 gestiona reinicios vía autorestart.
 
 ---
 
@@ -59,3 +58,4 @@
 - 24/05: Bloque C — settle daemon persiste outcomes de TODOS los análisis NBA (sin sesgo de selector)
 - 24/05: FASE 3 — eliminado app/ legacy y tests asociados
 - 24/05: Tailscale — confirmado como servicio Automatic, acceso remoto garantizado
+- 24/05: reload=False — uvicorn en modo producción, sin StatReload watcher
