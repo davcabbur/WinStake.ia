@@ -4,6 +4,7 @@ Define SportConfig y el registro de deportes disponibles.
 """
 
 from dataclasses import dataclass, field
+from datetime import datetime
 
 
 @dataclass
@@ -110,3 +111,18 @@ def get_sport(key: str) -> SportConfig:
         available = ", ".join(SPORTS.keys())
         raise ValueError(f"Deporte '{key}' no encontrado. Disponibles: {available}")
     return SPORTS[key]
+
+
+def current_nba_season() -> str:
+    """Devuelve la temporada NBA actual en formato '2025-26'.
+
+    La temporada NBA va de octubre a junio. Antes de octubre,
+    devuelve la temporada que acaba de terminar.
+    """
+    now = datetime.now()
+    if now.month >= 10:
+        start = now.year
+    else:
+        start = now.year - 1
+    end_short = str(start + 1)[2:]
+    return f"{start}-{end_short}"
