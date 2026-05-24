@@ -19,6 +19,11 @@ from src.logger_config import setup_logging
 from src.database import DB_PATH
 from src.result_verifier import verify_results
 from src.backtester import run_backtesting_check
+from src.historical_results import (
+    fetch_nba_season_results,
+    persist_outcomes as _persist_nba_outcomes_to_db,
+)
+from src.sports.config import current_nba_season
 
 logger = setup_logging("WinStakeSettle")
 
@@ -32,9 +37,25 @@ def in_active_window(hour: int) -> bool:
     return hour >= ACTIVE_WINDOW_START or hour < ACTIVE_WINDOW_END
 
 
+def persist_nba_outcomes() -> int:
+    """Fetcha resultados NBA de la temporada actual y los persiste en match_outcomes.
+
+    Returns:
+        Número de outcomes nuevos insertados (0 si todos ya existían o hay error).
+    """
+    try:
+        season = current_nba_season()
+        games = fetch_nba_season_results(season=season)
+        stats = _persist_nba_outcomes_to_db(games, db_path=str(DB_PATH))
+        return stats.get("inserted", 0)
+    except Exception as e:
+        logger.warning(f"Error persisting NBA outcomes: {e}")
+        return 0
+
+
 def settle_all() -> dict:
     """Ejecuta un ciclo de settle para LaLiga y NBA, aislando errores por deporte."""
-    summary: dict = {"laliga": None, "nba": None}
+    summary: dict = {"laliga": None, "nba": None, "nba_outcomes": None}
 
     if config.LALIGA_ENABLED:
         try:
@@ -53,6 +74,11 @@ def settle_all() -> dict:
     except Exception as e:
         logger.error(f"Error en settle NBA: {e}", exc_info=True)
         summary["nba"] = {"error": str(e)}
+
+    n_outcomes = persist_nba_outcomes()
+    if n_outcomes > 0:
+        logger.info(f"Persistidos {n_outcomes} nuevos outcomes NBA")
+    summary["nba_outcomes"] = n_outcomes
 
     logger.info(f"✅ Ciclo completado: {summary}")
     return summary
