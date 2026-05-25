@@ -49,6 +49,33 @@
 - **reload=False**: ✓ resuelto (24/05). uvicorn corre sin watcher de
   ficheros. PM2 gestiona reinicios vía autorestart.
 
+## Trabajo grande / sesión dedicada
+
+### Player Props NBA (objetivo 2-3 meses, post-recalibración)
+
+Sistema separado para mercados de jugador individual: puntos,
+rebotes, asistencias, triples por jugador.
+
+Pre-requisitos antes de empezar:
+1. Modelo Normal recalibrado y validado (ROI break-even o positivo)
+2. Dataset NBA acumulado de toda una temporada
+3. Automatización de análisis funcionando
+
+Componentes nuevos necesarios:
+- Pipeline de datos: nba_api PlayerGameLog, BoxScore avanzado
+- Modelo de regresión por jugador (no reutiliza el Normal)
+- Tabla player_predictions desacoplada
+- Detección de lesiones/lineups en tiempo real
+- Variables: factor cancha, matchup defensivo, descanso,
+  back-to-back, minutos esperados
+
+Inspiración del usuario: "en un Spurs-OKC analizar últimos
+partidos de Wembanyama, estado físico, factor cancha, y ver qué
+picks son mejores (puntos, rebotes, triples, asistencias)".
+
+Estimación: proyecto de 2-3 sesiones de día completo cada una.
+NO empezar hasta cumplir pre-requisitos.
+
 ---
 
 ## Histórico de hitos completados
