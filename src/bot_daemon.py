@@ -1055,7 +1055,7 @@ def _format_scheduled_picks_message(
             f"• <b>{analysis.home_team} vs {analysis.away_team}</b>\n"
             f"  {bb.selection} @ {bb.odds:.2f} "
             f"| EV +{bb.ev_percent:.1f}% "
-            f"| {bb.confidence}"
+            f"| {analysis.confidence}"
         )
 
     footer = (
