@@ -277,3 +277,36 @@ async def test_daily_task_recovers_from_error(mock_sleep, mock_execute):
     # sleep called: initial wait + error recovery wait
     assert mock_sleep.call_count >= 2
 
+
+def test_format_scheduled_uses_real_dataclasses():
+    """Regresión: bb.confidence no existe en EVResult — debe leerse de analysis.confidence."""
+    from src.ev_calculator import EVResult
+    from src.analyzer import MatchAnalysis
+
+    ev = EVResult(
+        selection="Home",
+        probability=0.55,
+        odds=1.95,
+        ev=0.075,
+        ev_percent=7.5,
+        is_value=True,
+    )
+    analysis = MatchAnalysis(
+        home_team="Test Home",
+        away_team="Test Away",
+        commence_time="2026-05-25T23:00:00Z",
+        best_bet=ev,
+        confidence="Alta",
+    )
+
+    msg = _format_scheduled_picks_message(
+        analyses={"key": analysis},
+        total_matches=1,
+        value_picks_count=1,
+    )
+
+    assert "Test Home vs Test Away" in msg
+    assert "EV +7.5%" in msg
+    assert "Alta" in msg
+    assert "Picks persistidos" in msg
+
