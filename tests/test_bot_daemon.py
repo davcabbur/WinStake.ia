@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from src.bot_daemon import (
     start_command, ping_command, roi_command, _analizar_sport,
     laliga_command, analizar_command, _LALIGA_DISABLED_MSG,
+    _format_scheduled_picks_message,
 )
 
 @pytest.mark.asyncio
@@ -140,4 +141,48 @@ async def test_analizar_command_disabled(mock_analizar):
 
     mock_analizar.assert_not_called()
     update.message.reply_text.assert_called_once_with(_LALIGA_DISABLED_MSG)
+
+
+def _make_analysis_mock(home="Lakers", away="Celtics", is_value=True, ev=5.0, odds=1.95, sel="home"):
+    from src.analyzer import MatchAnalysis
+    analysis = MagicMock(spec=MatchAnalysis)
+    analysis.home_team = home
+    analysis.away_team = away
+    analysis.commence_time = "2026-05-25T23:00:00Z"
+    analysis.match_id = f"{home}_{away}"
+    if is_value:
+        bb = MagicMock()
+        bb.is_value = True
+        bb.selection = sel
+        bb.odds = odds
+        bb.ev_percent = ev
+        bb.confidence = "HIGH"
+        analysis.best_bet = bb
+    else:
+        analysis.best_bet = None
+    return analysis
+
+
+def test_format_scheduled_with_picks():
+    analysis = _make_analysis_mock(ev=7.5)
+    analyses = {analysis.match_id: analysis}
+    msg = _format_scheduled_picks_message(analyses, total_matches=3, value_picks_count=1)
+
+    assert "Análisis NBA automático" in msg
+    assert "3 partidos" in msg
+    assert "1 value picks" in msg
+    assert "Lakers vs Celtics" in msg
+    assert "EV +7.5%" in msg
+    assert "Picks persistidos" in msg
+
+
+def test_format_scheduled_zero_value():
+    analysis = _make_analysis_mock(is_value=False)
+    analyses = {analysis.match_id: analysis}
+    msg = _format_scheduled_picks_message(analyses, total_matches=2, value_picks_count=0)
+
+    assert "0 picks con value" in msg
+    assert "2 partidos analizados" in msg
+    assert "/nba" in msg
+    assert "Lakers vs Celtics" not in msg
 

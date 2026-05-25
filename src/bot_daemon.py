@@ -1026,6 +1026,46 @@ async def _daily_backtesting_task():
             await asyncio.sleep(3600)  # retry in 1h on unexpected error
 
 
+def _format_scheduled_picks_message(
+    analyses: dict,
+    total_matches: int,
+    value_picks_count: int,
+) -> str:
+    """Genera mensaje HTML para la notificación automática de las 23:00."""
+    if value_picks_count == 0:
+        return (
+            "🏀 <b>Análisis NBA automático — 23:00</b>\n\n"
+            f"📊 {total_matches} partidos analizados\n"
+            "⚠️ 0 picks con value (EV ≥ 3%)\n\n"
+            "<i>El modelo no encontró value hoy. "
+            "Manda /nba para ver el detalle.</i>"
+        )
+
+    header = (
+        "🏀 <b>Análisis NBA automático — 23:00</b>\n\n"
+        f"📊 {total_matches} partidos | 🎯 {value_picks_count} value picks\n\n"
+    )
+
+    lines = []
+    for analysis in sorted(analyses.values(), key=lambda a: a.commence_time or ""):
+        if not analysis.best_bet or not analysis.best_bet.is_value:
+            continue
+        bb = analysis.best_bet
+        lines.append(
+            f"• <b>{analysis.home_team} vs {analysis.away_team}</b>\n"
+            f"  {bb.selection} @ {bb.odds:.2f} "
+            f"| EV +{bb.ev_percent:.1f}% "
+            f"| {bb.confidence}"
+        )
+
+    footer = (
+        "\n\n<i>Picks persistidos en paper trading. "
+        "Usa /nba para detalle interactivo.</i>"
+    )
+
+    return header + "\n\n".join(lines) + footer
+
+
 def _split_message(text: str, max_length: int = 4096) -> list[str]:
     """Divide un mensaje largo en chunks."""
     if len(text) <= max_length:
