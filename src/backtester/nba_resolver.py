@@ -1,6 +1,6 @@
 """
 WinStake.ia — Backtesting Automático NBA (Improvement 7)
-Resuelve picks pendientes consultando resultados reales via nba_api.
+Resuelve picks pendientes consultando resultados reales en match_outcomes.
 """
 
 import logging
@@ -10,14 +10,8 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-NBA_SEASON = "2025-26"
-
 
 def _migrate_backtesting_columns(conn: sqlite3.Connection) -> None:
-    """
-    Adds backtesting columns to value_bets and match_results if they don't exist.
-    Columns: result (WIN/LOSS/PUSH), actual_score, resolved_at.
-    """
     vb_cols = [row[1] for row in conn.execute("PRAGMA table_info(value_bets)").fetchall()]
     mr_cols = [row[1] for row in conn.execute("PRAGMA table_info(match_results)").fetchall()]
 
@@ -36,69 +30,55 @@ def _migrate_backtesting_columns(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def _fetch_game_result_from_nba_api(home_team: str, away_team: str, game_date: str) -> Optional[dict]:
+def _fetch_game_result_from_db(
+    conn: sqlite3.Connection,
+    home_team: str,
+    away_team: str,
+    commence_time: str,
+) -> Optional[dict]:
     """
-    Tries to find the final score for a game using leaguegamefinder.
-    Returns {"home_pts": int, "away_pts": int} or None if not found.
+    Lee el resultado final de match_outcomes.
+    Devuelve {"home_pts": int, "away_pts": int} o None si no existe el partido.
     """
-    import time
-    try:
-        from nba_api.stats.endpoints import leaguegamefinder
-        from nba_api.stats.static import teams as nba_teams
+    game_date = commence_time[:10]  # 'YYYY-MM-DD'
+    row = conn.execute(
+        """SELECT home_score, away_score
+           FROM match_outcomes
+           WHERE home_team = ? AND away_team = ? AND game_date = ?""",
+        (home_team, away_team, game_date),
+    ).fetchone()
 
-        all_teams = nba_teams.get_teams()
-
-        def find_team_id(name: str) -> Optional[int]:
-            name_low = name.lower()
-            for t in all_teams:
-                if (t["full_name"].lower() in name_low or
-                        name_low in t["full_name"].lower() or
-                        t["nickname"].lower() in name_low):
-                    return t["id"]
-            return None
-
-        home_id = find_team_id(home_team)
-        if not home_id:
-            logger.warning(f"No team ID found for: {home_team}")
-            return None
-
-        try:
-            date_from = (datetime.strptime(game_date[:10], "%Y-%m-%d") - timedelta(days=1)).strftime("%m/%d/%Y")
-            date_to = (datetime.strptime(game_date[:10], "%Y-%m-%d") + timedelta(days=1)).strftime("%m/%d/%Y")
-        except (ValueError, TypeError):
-            logger.warning(f"Invalid game_date format: {game_date}")
-            return None
-
-        time.sleep(0.6)
-        finder = leaguegamefinder.LeagueGameFinder(
-            team_id_nullable=home_id,
-            date_from_nullable=date_from,
-            date_to_nullable=date_to,
-            season_nullable=NBA_SEASON,
-        )
-        df = finder.get_data_frames()[0]
-        if df.empty:
-            logger.info(f"No games found for {home_team} around {game_date}")
-            return None
-
-        away_low = away_team.lower().split()[-1]
-        for _, row in df.iterrows():
-            matchup = str(row.get("MATCHUP", ""))
-            if away_low in matchup.lower() or "vs." in matchup:
-                pts = int(row.get("PTS", 0))
-                pm = int(row.get("PLUS_MINUS", 0)) if str(row.get("PLUS_MINUS", "nan")) != "nan" else 0
-                opp_pts = pts - pm
-                is_home = "vs." in matchup
-                if is_home:
-                    return {"home_pts": pts, "away_pts": opp_pts}
-                else:
-                    return {"home_pts": opp_pts, "away_pts": pts}
-
+    if row is None:
+        logger.info(f"No games found for {home_team} vs {away_team} on {game_date}")
         return None
 
-    except Exception as e:
-        logger.warning(f"Error fetching NBA result for {home_team} vs {away_team}: {e}")
-        return None
+    return {"home_pts": row[0], "away_pts": row[1]}
+
+
+def _void_stale_pending(conn: sqlite3.Connection, days_threshold: int = 14) -> int:
+    """
+    Marca como VOID picks pendientes cuyo commence_time supera el umbral de días.
+    Llamar DESPUÉS del bucle de resolución para no anular picks que sí tienen outcome.
+    """
+    cutoff_iso = (datetime.now(tz=None) - timedelta(days=days_threshold)).isoformat()
+    now_str = datetime.now().isoformat()
+
+    cur = conn.execute(
+        """UPDATE value_bets
+           SET result = 'VOID',
+               pnl_units = 0,
+               settled_at = ?
+           WHERE sport = 'nba'
+             AND is_paper = 1
+             AND result IS NULL
+             AND analysis_id IN (
+               SELECT id FROM analyses
+               WHERE commence_time < ?
+             )""",
+        (now_str, cutoff_iso),
+    )
+    conn.commit()
+    return cur.rowcount
 
 
 def _determine_result(selection: str, home_pts: int, away_pts: int, line: Optional[float]) -> str:
@@ -152,10 +132,8 @@ def _determine_result(selection: str, home_pts: int, away_pts: int, line: Option
 
 def run_backtesting_check(db_path: str) -> dict:
     """
-    Improvement 7: Query SQLite for picks from >24h ago where result is NULL,
-    fetch actual scores from nba_api, and update results.
-
-    Returns a summary dict with counts resolved.
+    Consulta picks NBA de >24h sin resultado, resuelve desde match_outcomes,
+    y voidea los que llevan >14 días pendientes sin outcome disponible.
     """
     resolved = 0
     errors = 0
@@ -177,7 +155,6 @@ def run_backtesting_check(db_path: str) -> dict:
                 vb.odds,
                 vb.stake_units,
                 vb.line,
-                vb.result,
                 a.home_team,
                 a.away_team,
                 a.commence_time,
@@ -186,6 +163,7 @@ def run_backtesting_check(db_path: str) -> dict:
             JOIN analyses a ON vb.analysis_id = a.id
             LEFT JOIN match_results mr ON mr.value_bet_id = vb.id
             WHERE mr.id IS NULL
+              AND vb.result IS NULL
               AND a.run_date < ?
               AND a.sport = 'nba'
         """, (cutoff,)).fetchall()
@@ -202,7 +180,7 @@ def run_backtesting_check(db_path: str) -> dict:
             stake = row["stake_units"]
             line = row["line"]
 
-            result_data = _fetch_game_result_from_nba_api(home_team, away_team, commence_time)
+            result_data = _fetch_game_result_from_db(conn, home_team, away_team, commence_time)
             if not result_data:
                 skipped += 1
                 continue
@@ -224,20 +202,11 @@ def run_backtesting_check(db_path: str) -> dict:
                     value_bet_id, actual_home_goals, actual_away_goals,
                     bet_won, profit_units, recorded_at, actual_score, resolved_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                bet_id,
-                home_pts,
-                away_pts,
-                bet_won,
-                profit,
-                now_str,
-                actual_score,
-                now_str,
-            ))
+            """, (bet_id, home_pts, away_pts, bet_won, profit, now_str, actual_score, now_str))
 
             conn.execute(
                 "UPDATE value_bets SET result = ?, pnl_units = ?, settled_at = ? WHERE id = ?",
-                (result, profit, now_str, bet_id)
+                (result, profit, now_str, bet_id),
             )
 
             conn.commit()
@@ -246,6 +215,11 @@ def run_backtesting_check(db_path: str) -> dict:
                 f"Resuelto bet #{bet_id}: {home_team} vs {away_team} "
                 f"({actual_score}) → {selection} = {result} | profit: {profit:+.2f}u"
             )
+
+        # VOID picks sin outcome tras el umbral de días (ejecutar después de intentar resolver)
+        voided = _void_stale_pending(conn)
+        if voided > 0:
+            logger.info(f"Marcados como VOID {voided} picks > 14 días pendientes")
 
         conn.close()
 
@@ -259,9 +233,7 @@ def run_backtesting_check(db_path: str) -> dict:
 
 
 def get_backtesting_summary(db_path: str) -> dict:
-    """
-    Returns a summary of auto-resolved backtesting results.
-    """
+    """Returns a summary of auto-resolved backtesting results."""
     try:
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
