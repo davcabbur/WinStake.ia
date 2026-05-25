@@ -1,10 +1,12 @@
+import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.bot_daemon import (
     start_command, ping_command, roi_command, _analizar_sport,
     laliga_command, analizar_command, _LALIGA_DISABLED_MSG,
-    _format_scheduled_picks_message,
+    _format_scheduled_picks_message, _execute_nba_analysis,
+    _daily_nba_analysis_task,
 )
 
 @pytest.mark.asyncio
@@ -185,4 +187,93 @@ def test_format_scheduled_zero_value():
     assert "2 partidos analizados" in msg
     assert "/nba" in msg
     assert "Lakers vs Celtics" not in msg
+
+
+@pytest.mark.asyncio
+@patch("src.bot_daemon._execute_nba_analysis", new_callable=AsyncMock)
+@patch("src.bot_daemon.asyncio.sleep", new_callable=AsyncMock)
+async def test_daily_task_silent_when_zero_matches(mock_sleep, mock_execute):
+    mock_execute.return_value = {
+        "analyses": {}, "lineup_updates": {}, "sorted_matches": [],
+        "keyboard": [], "total_matches": 0, "value_picks_count": 0,
+        "injury_report": None,
+    }
+    # After first sleep+execute, raise CancelledError to exit the loop
+    mock_sleep.side_effect = [None, asyncio.CancelledError()]
+
+    app = MagicMock()
+    app.bot.send_message = AsyncMock()
+
+    await _daily_nba_analysis_task(app)
+
+    app.bot.send_message.assert_not_called()
+
+
+@pytest.mark.asyncio
+@patch("src.bot_daemon._execute_nba_analysis", new_callable=AsyncMock)
+@patch("src.bot_daemon.asyncio.sleep", new_callable=AsyncMock)
+async def test_daily_task_sends_message_with_matches(mock_sleep, mock_execute):
+    analysis = _make_analysis_mock(ev=6.0)
+    mock_execute.return_value = {
+        "analyses": {analysis.match_id: analysis},
+        "lineup_updates": {},
+        "sorted_matches": [analysis],
+        "keyboard": [],
+        "total_matches": 1,
+        "value_picks_count": 1,
+        "injury_report": None,
+    }
+    mock_sleep.side_effect = [None, asyncio.CancelledError()]
+
+    app = MagicMock()
+    app.bot.send_message = AsyncMock()
+
+    await _daily_nba_analysis_task(app)
+
+    app.bot.send_message.assert_called_once()
+    sent_text = app.bot.send_message.call_args.kwargs.get("text", "")
+    assert "Lakers vs Celtics" in sent_text
+
+
+@pytest.mark.asyncio
+@patch("src.bot_daemon._execute_nba_analysis", new_callable=AsyncMock)
+@patch("src.bot_daemon.asyncio.sleep", new_callable=AsyncMock)
+async def test_daily_task_sends_injury_report_when_present(mock_sleep, mock_execute):
+    analysis = _make_analysis_mock(ev=4.5)
+    mock_execute.return_value = {
+        "analyses": {analysis.match_id: analysis},
+        "lineup_updates": {},
+        "sorted_matches": [analysis],
+        "keyboard": [],
+        "total_matches": 1,
+        "value_picks_count": 1,
+        "injury_report": "Injury: Player X out",
+    }
+    mock_sleep.side_effect = [None, asyncio.CancelledError()]
+
+    app = MagicMock()
+    app.bot.send_message = AsyncMock()
+
+    await _daily_nba_analysis_task(app)
+
+    assert app.bot.send_message.call_count == 2
+    injury_text = app.bot.send_message.call_args_list[1].kwargs.get("text", "")
+    assert "Injury" in injury_text
+
+
+@pytest.mark.asyncio
+@patch("src.bot_daemon._execute_nba_analysis", new_callable=AsyncMock)
+@patch("src.bot_daemon.asyncio.sleep", new_callable=AsyncMock)
+async def test_daily_task_recovers_from_error(mock_sleep, mock_execute):
+    mock_execute.side_effect = [RuntimeError("API down"), asyncio.CancelledError()]
+    mock_sleep.side_effect = [None, None, asyncio.CancelledError()]
+
+    app = MagicMock()
+    app.bot.send_message = AsyncMock()
+
+    await _daily_nba_analysis_task(app)
+
+    app.bot.send_message.assert_not_called()
+    # sleep called: initial wait + error recovery wait
+    assert mock_sleep.call_count >= 2
 

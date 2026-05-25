@@ -1066,6 +1066,58 @@ def _format_scheduled_picks_message(
     return header + "\n\n".join(lines) + footer
 
 
+async def _daily_nba_analysis_task(application) -> None:
+    """Loop perpetuo: espera hasta las 23:00 Madrid, ejecuta análisis NBA y notifica."""
+    tz = ZoneInfo("Europe/Madrid")
+    while True:
+        now = datetime.now(tz)
+        target = now.replace(hour=23, minute=0, second=0, microsecond=0)
+        if now >= target:
+            target = target + timedelta(days=1)
+        wait_seconds = (target - now).total_seconds()
+        logger.info(
+            f"Próximo análisis NBA automático: {target.isoformat()} "
+            f"(en {wait_seconds / 3600:.1f}h)"
+        )
+        try:
+            await asyncio.sleep(wait_seconds)
+            result = await _execute_nba_analysis()
+            if result["total_matches"] == 0:
+                logger.info("Análisis 23:00: 0 partidos NBA hoy, silencio")
+                continue
+            message = _format_scheduled_picks_message(
+                result["analyses"], result["total_matches"], result["value_picks_count"]
+            )
+            await application.bot.send_message(
+                chat_id=config.TELEGRAM_CHAT_ID,
+                text=message,
+                parse_mode=ParseMode.HTML,
+            )
+            if result["value_picks_count"] > 0:
+                _jornada_cache[int(config.TELEGRAM_CHAT_ID)] = {
+                    "analyses": result["analyses"],
+                    "sport": get_sport("nba"),
+                    "sorted_matches": result["sorted_matches"],
+                    "lineup_updates": result["lineup_updates"],
+                }
+                if result["injury_report"]:
+                    for chunk in _split_message(result["injury_report"]):
+                        await application.bot.send_message(
+                            chat_id=config.TELEGRAM_CHAT_ID,
+                            text=chunk,
+                            parse_mode=ParseMode.HTML,
+                        )
+            logger.info(
+                f"Análisis 23:00 completado: {result['total_matches']} partidos, "
+                f"{result['value_picks_count']} value picks enviados"
+            )
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"Error en análisis automático 23:00: {e}", exc_info=True)
+            await asyncio.sleep(3600)
+
+
 def _split_message(text: str, max_length: int = 4096) -> list[str]:
     """Divide un mensaje largo en chunks."""
     if len(text) <= max_length:
@@ -1118,6 +1170,7 @@ def main():
     async def post_init(app):
         asyncio.create_task(_daily_backtesting_task())
         asyncio.create_task(_lineup_monitor_task(app))
+        asyncio.create_task(_daily_nba_analysis_task(app))
         logger.info("🔄 Monitor de onces activo — verificando cada 10 min")
 
     application.post_init = post_init
