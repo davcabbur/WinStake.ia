@@ -6,7 +6,8 @@ Bot interactivo con botones inline para seleccionar partidos de la jornada.
 import logging
 import asyncio
 from dataclasses import replace as dataclass_replace
-from datetime import datetime
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
@@ -598,23 +599,31 @@ async def roi_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def _analizar_sport(update: Update, context: ContextTypes.DEFAULT_TYPE, sport_key: str = "laliga"):
     """
     Analiza la jornada completa de un deporte y muestra botones inline.
+    NBA usa _execute_nba_analysis() (compartido con el scheduler 23:00).
     """
     sport = get_sport(sport_key)
     chat_id = update.effective_chat.id
     await update.message.reply_text(f"⏳ Analizando {sport.emoji} {sport.name}... Esto puede tardar unos segundos.")
 
     try:
-        loop = asyncio.get_running_loop()
-        analyses, lineup_updates = await loop.run_in_executor(
-            None, lambda: _run_analysis_for_jornada(sport)
-        )
+        if sport.sport_type == "basketball":
+            result = await _execute_nba_analysis()
+            analyses = result["analyses"]
+            lineup_updates = result["lineup_updates"]
+            sorted_matches = result["sorted_matches"]
+            keyboard = result["keyboard"]
+            injury_report_text = result["injury_report"]
+        else:
+            loop = asyncio.get_running_loop()
+            analyses, lineup_updates = await loop.run_in_executor(
+                None, lambda: _run_analysis_for_jornada(sport)
+            )
+            keyboard, sorted_matches = _build_match_keyboard(analyses, sport, lineup_updates)
+            injury_report_text = None
 
         if not analyses:
             await update.message.reply_text("❌ No se encontraron partidos para analizar.")
             return
-
-        # Construir teclado inline (devuelve también la lista ordenada)
-        keyboard, sorted_matches = _build_match_keyboard(analyses, sport, lineup_updates)
 
         # Guardar en caché para este chat
         _jornada_cache[chat_id] = {
@@ -648,11 +657,9 @@ async def _analizar_sport(update: Update, context: ContextTypes.DEFAULT_TYPE, sp
         await update.message.reply_html(header, reply_markup=reply_markup)
 
         # NBA: enviar Injury Report de ESPN como mensaje separado
-        if sport.sport_type == "basketball":
-            injury_report = NBAFormatter().format_injury_report(list(analyses.values()))
-            if injury_report:
-                for chunk in _split_message(injury_report):
-                    await update.message.reply_html(chunk, disable_web_page_preview=True)
+        if injury_report_text:
+            for chunk in _split_message(injury_report_text):
+                await update.message.reply_html(chunk, disable_web_page_preview=True)
 
     except (SystemExit, RuntimeError) as e:
         logger.error(f"Error en análisis: {e}")
@@ -715,6 +722,45 @@ def _build_match_keyboard(
     if sport.sport_type == "basketball":
         keyboard.append([InlineKeyboardButton("🎯 Radar Props", callback_data="parlay")])
     return keyboard, sorted_analyses
+
+
+async def _execute_nba_analysis() -> dict:
+    """Ejecuta análisis NBA sin depender de Telegram update/context.
+
+    Reutilizado por _analizar_sport (comando /nba) y por el scheduler
+    _daily_nba_analysis_task (análisis automático 23:00).
+
+    Returns dict con:
+        analyses, lineup_updates, sorted_matches, keyboard,
+        total_matches, value_picks_count, injury_report.
+    Excepciones de _run_analysis_for_jornada se propagan al caller.
+    """
+    sport = get_sport("nba")
+    loop = asyncio.get_running_loop()
+    analyses, lineup_updates = await loop.run_in_executor(
+        None, lambda: _run_analysis_for_jornada(sport)
+    )
+
+    if not analyses:
+        return {
+            "analyses": {}, "lineup_updates": {}, "sorted_matches": [],
+            "keyboard": [], "total_matches": 0, "value_picks_count": 0,
+            "injury_report": None,
+        }
+
+    keyboard, sorted_matches = _build_match_keyboard(analyses, sport, lineup_updates)
+    value_count = sum(1 for a in analyses.values() if a.best_bet and a.best_bet.is_value)
+    injury_report = NBAFormatter().format_injury_report(list(analyses.values()))
+
+    return {
+        "analyses": analyses,
+        "lineup_updates": lineup_updates,
+        "sorted_matches": sorted_matches,
+        "keyboard": keyboard,
+        "total_matches": len(analyses),
+        "value_picks_count": value_count,
+        "injury_report": injury_report,
+    }
 
 
 async def analizar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):

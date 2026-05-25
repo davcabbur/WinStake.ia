@@ -140,3 +140,4 @@ async def test_analizar_command_disabled(mock_analizar):
 
     mock_analizar.assert_not_called()
     update.message.reply_text.assert_called_once_with(_LALIGA_DISABLED_MSG)
+
