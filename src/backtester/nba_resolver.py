@@ -38,21 +38,30 @@ def _fetch_game_result_from_db(
 ) -> Optional[dict]:
     """
     Lee el resultado final de match_outcomes.
+    Tolera desfase UTC vs ET: los partidos NBA empiezan 19-23 ET (00-04 UTC del
+    día siguiente), por lo que nba_api guarda game_date en ET mientras
+    commence_time está en UTC. Se intenta primero la fecha UTC y luego la del
+    día anterior como fallback.
     Devuelve {"home_pts": int, "away_pts": int} o None si no existe el partido.
     """
-    game_date = commence_time[:10]  # 'YYYY-MM-DD'
-    row = conn.execute(
-        """SELECT home_score, away_score
-           FROM match_outcomes
-           WHERE home_team = ? AND away_team = ? AND game_date = ?""",
-        (home_team, away_team, game_date),
-    ).fetchone()
+    utc_date = commence_time[:10]  # 'YYYY-MM-DD'
+    prev_date = (datetime.fromisoformat(utc_date) - timedelta(days=1)).strftime("%Y-%m-%d")
 
-    if row is None:
-        logger.info(f"No games found for {home_team} vs {away_team} on {game_date}")
-        return None
+    for candidate_date in (utc_date, prev_date):
+        row = conn.execute(
+            """SELECT home_score, away_score
+               FROM match_outcomes
+               WHERE home_team = ? AND away_team = ? AND game_date = ?""",
+            (home_team, away_team, candidate_date),
+        ).fetchone()
+        if row is not None:
+            return {"home_pts": row[0], "away_pts": row[1]}
 
-    return {"home_pts": row[0], "away_pts": row[1]}
+    logger.info(
+        f"No games found for {home_team} vs {away_team} "
+        f"(tried UTC {utc_date} and ET fallback {prev_date})"
+    )
+    return None
 
 
 def _void_stale_pending(conn: sqlite3.Connection, days_threshold: int = 14) -> int:
@@ -146,7 +155,7 @@ def run_backtesting_check(db_path: str) -> dict:
 
         _migrate_backtesting_columns(conn)
 
-        cutoff = (datetime.now() - timedelta(hours=24)).isoformat()
+        cutoff = (datetime.now() - timedelta(hours=4)).isoformat()
 
         pending = conn.execute("""
             SELECT
@@ -164,7 +173,7 @@ def run_backtesting_check(db_path: str) -> dict:
             LEFT JOIN match_results mr ON mr.value_bet_id = vb.id
             WHERE mr.id IS NULL
               AND vb.result IS NULL
-              AND a.run_date < ?
+              AND a.commence_time < ?
               AND a.sport = 'nba'
         """, (cutoff,)).fetchall()
 
