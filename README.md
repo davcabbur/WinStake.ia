@@ -121,11 +121,12 @@ WinStake.ia/
 │   ├── nba_formatter.py   # Formateador Telegram (NBA)
 │   ├── database.py        # SQLite multi-deporte
 │   ├── telegram_bot.py    # Bot de Telegram
-│   └── backtester/        # Motor de backtesting histórico y evaluación
-├── app/                   # FastAPI backend (dashboard)
+│   ├── backtester/        # Motor de backtesting histórico y evaluación
+│   ├── settle_daemon.py   # Daemon de liquidación (persist outcomes → resolve picks)
+│   └── api/               # FastAPI backend (dashboard) — app.py, routes, websockets
 ├── frontend/              # Angular 18 frontend (ng serve --host 0.0.0.0)
 ├── ecosystem.config.js    # PM2: winstake-api, bot, settle, frontend
-└── tests/                 # 201 tests (Poisson, Normal, NBA, DB)
+└── tests/                 # 233 tests (Poisson, Normal, NBA, DB)
 ```
 
 ---
@@ -238,7 +239,7 @@ pm2 save
 |---|---|
 | `winstake-api` | FastAPI en `0.0.0.0:8000` |
 | `winstake-bot` | Bot de Telegram (polling) |
-| `winstake-settle` | Daemon de liquidación de value bets cada 60 min |
+| `winstake-settle` | Daemon de liquidación cada 60 min (persiste outcomes → resuelve picks) |
 | `winstake-frontend` | Angular dev server en `0.0.0.0:4200` |
 
 ### Acceso remoto vía Tailscale
@@ -391,7 +392,7 @@ Parametros NBA se configuran en `src/sports/config.py`:
 ```bash
 python -m pytest tests/ -q
 
-# 201 tests:
+# 233 tests:
 # - Poisson: probabilidades, lambda, correct score, asian handicap
 # - Normal (NBA): scores, spreads, totals, H2H adjustment
 # - EV Calculator: futbol + NBA markets, correlaciones
@@ -399,7 +400,7 @@ python -m pytest tests/ -q
 # - Database: save, ROI, pending results, multi-deporte
 # - NBAClient: standings, team search, fuzzy match
 # - Analyzer routing: futbol vs basketball
-# - Settle daemon: ventana temporal, resolución de picks
+# - Settle daemon: ventana temporal, orden persist→resolve, resolución de picks
 # - Odds source: raw odds flag
 ```
 
