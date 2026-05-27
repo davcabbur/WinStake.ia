@@ -86,3 +86,27 @@ NO empezar hasta cumplir pre-requisitos.
 - 24/05: FASE 3 — eliminado app/ legacy y tests asociados
 - 24/05: Tailscale — confirmado como servicio Automatic, acceso remoto garantizado
 - 24/05: reload=False — uvicorn en modo producción, sin StatReload watcher
+
+---
+
+## Bugs conocidos
+
+### winstake-settle estuvo caído ~21h (26/05)
+
+El 26/05 el daemon settle no hizo ticks entre las 00:20 y las 21:50
+aproximadamente, dejando picks pendientes durante todo el día.
+
+PM2 está configurado con autorestart=true, así que un downtime de
+21h sugiere uno de:
+- PM2 falló al rearrancar tras un crash silencioso
+- unstable_restarts se disparó y PM2 dejó de reintentar
+- Algún reinicio de Windows sin levantar PM2
+
+Diagnóstico pendiente. Cuando se aborde, revisar:
+- pm2 logs winstake-settle (logs históricos con fechas)
+- pm2 info winstake-settle (restart_time, unstable_restarts)
+- Event Viewer Windows (apagados/reinicios entre las 00:20 y 21:50 del 26/05)
+- Logs PM2: ~/.pm2/logs/winstake-settle-*.log
+
+Prioridad: media. No es bloqueante pero deja picks pendientes ante
+cualquier downtime largo del daemon.
