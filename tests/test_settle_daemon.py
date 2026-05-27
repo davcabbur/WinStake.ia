@@ -114,6 +114,33 @@ def test_settle_includes_nba_outcomes_in_summary():
     assert result["nba_outcomes"] == 3
 
 
+def test_persist_runs_before_nba_resolve():
+    """persist_nba_outcomes debe ejecutarse ANTES de run_backtesting_check.
+
+    Regresión: si se resuelve antes de persistir, el outcome de un partido
+    recién terminado no está en match_outcomes al resolver y la pick queda
+    pendiente un ciclo extra (o indefinidamente si el daemon se reinicia).
+    """
+    call_order = []
+
+    def record_persist():
+        call_order.append("persist")
+        return 1
+
+    def record_resolve(_db_path):
+        call_order.append("resolve")
+        return {"resolved": 0}
+
+    with patch.object(settle_daemon.config, "LALIGA_ENABLED", False), \
+         patch.object(settle_daemon, "persist_nba_outcomes", side_effect=record_persist), \
+         patch.object(settle_daemon, "run_backtesting_check", side_effect=record_resolve):
+        settle_daemon.settle_all()
+
+    assert call_order == ["persist", "resolve"], (
+        f"Se esperaba persistir antes de resolver, orden real: {call_order}"
+    )
+
+
 def test_settle_logs_outcomes_only_if_positive(caplog):
     """Si persist_nba_outcomes devuelve 0, no se loggea. Si >0, sí."""
     import logging

@@ -68,17 +68,20 @@ def settle_all() -> dict:
         logger.info("LaLiga settle: skipped (disabled in config)")
         summary["laliga"] = {"skipped": True}
 
+    # Persistir outcomes ANTES de resolver: un partido recién terminado debe
+    # estar en match_outcomes para que run_backtesting_check pueda liquidarlo
+    # en este mismo ciclo, no en el siguiente.
+    n_outcomes = persist_nba_outcomes()
+    if n_outcomes > 0:
+        logger.info(f"Persistidos {n_outcomes} nuevos outcomes NBA")
+    summary["nba_outcomes"] = n_outcomes
+
     try:
         logger.info("🏀 Settle NBA (run_backtesting_check)...")
         summary["nba"] = run_backtesting_check(str(DB_PATH))
     except Exception as e:
         logger.error(f"Error en settle NBA: {e}", exc_info=True)
         summary["nba"] = {"error": str(e)}
-
-    n_outcomes = persist_nba_outcomes()
-    if n_outcomes > 0:
-        logger.info(f"Persistidos {n_outcomes} nuevos outcomes NBA")
-    summary["nba_outcomes"] = n_outcomes
 
     logger.info(f"✅ Ciclo completado: {summary}")
     return summary
