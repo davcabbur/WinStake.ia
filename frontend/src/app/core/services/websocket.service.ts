@@ -1,4 +1,4 @@
-import { Injectable } from '@angular/core';
+import { Injectable, signal } from '@angular/core';
 import { Subject, Observable } from 'rxjs';
 import { environment } from '../../../environments/environment';
 
@@ -24,6 +24,9 @@ export class WebsocketService {
 
   public odds$: Observable<OddsUpdate> = this.oddsSubject.asObservable();
 
+  /** Estado de conexión del socket — lo consume el header terminal (ENGINE/WS dots). */
+  public readonly connected = signal(false);
+
   // Reference counting — only close when all consumers disconnect
   private refCount = 0;
 
@@ -41,6 +44,7 @@ export class WebsocketService {
 
     this.socket.onopen = () => {
       this.retryDelay = 1000; // reset backoff on successful connection
+      this.connected.set(true);
     };
 
     this.socket.onmessage = (event) => {
@@ -60,6 +64,7 @@ export class WebsocketService {
 
     this.socket.onclose = () => {
       this.socket = null;
+      this.connected.set(false);
       if (this.refCount > 0) {
         // Schedule reconnect with backoff
         this.retryTimer = setTimeout(() => this.reconnect(), this.retryDelay);
@@ -75,6 +80,7 @@ export class WebsocketService {
 
     this.socket.onopen = () => {
       this.retryDelay = 1000;
+      this.connected.set(true);
     };
     this.socket.onmessage = (event) => {
       try {
@@ -85,6 +91,7 @@ export class WebsocketService {
     this.socket.onerror = () => {};
     this.socket.onclose = () => {
       this.socket = null;
+      this.connected.set(false);
       if (this.refCount > 0) {
         this.retryTimer = setTimeout(() => this.reconnect(), this.retryDelay);
         this.retryDelay = Math.min(this.retryDelay * 2, this.maxRetryDelay);
@@ -105,6 +112,7 @@ export class WebsocketService {
       this.socket.close();
       this.socket = null;
     }
+    this.connected.set(false);
     this.retryDelay = 1000;
   }
 }

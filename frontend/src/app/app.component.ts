@@ -1,24 +1,24 @@
 import { Component } from '@angular/core';
 import { RouterOutlet } from '@angular/router';
 import { CommonModule } from '@angular/common';
-import { SidebarComponent } from './core/components/sidebar/sidebar.component';
-import { TopbarComponent } from './core/components/topbar/topbar.component';
+import { TickerStripComponent } from './core/components/ticker-strip/ticker-strip.component';
+import { TerminalHeaderComponent } from './core/components/terminal-header/terminal-header.component';
+import { StatusLineComponent } from './core/components/status-line/status-line.component';
 import { AuthService } from './core/auth/auth.service';
 
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [RouterOutlet, CommonModule, SidebarComponent, TopbarComponent],
+  imports: [RouterOutlet, CommonModule, TickerStripComponent, TerminalHeaderComponent, StatusLineComponent],
   template: `
     <ng-container *ngIf="auth.currentUser(); else bare">
-      <div class="app-layout">
-        <app-sidebar></app-sidebar>
-        <div class="app-main">
-          <app-topbar></app-topbar>
-          <div class="app-content">
-            <router-outlet></router-outlet>
-          </div>
-        </div>
+      <div class="term-shell">
+        <app-ticker-strip></app-ticker-strip>
+        <app-terminal-header></app-terminal-header>
+        <main class="term-outlet">
+          <router-outlet></router-outlet>
+        </main>
+        <app-status-line></app-status-line>
       </div>
     </ng-container>
     <ng-template #bare>
@@ -26,26 +26,17 @@ import { AuthService } from './core/auth/auth.service';
     </ng-template>
   `,
   styles: [`
-    .app-layout {
-      display: flex;
-      height: 100vh;
-      overflow: hidden;
-    }
-    .app-main {
-      flex: 1;
+    .term-shell {
+      min-height: 100vh;
       display: flex;
       flex-direction: column;
-      overflow-y: auto;
+      background: var(--ws-bg);
+      /* Desktop-first 1440px (handoff §5). Centrado sobre el fondo del documento. */
+      max-width: 1440px;
+      margin: 0 auto;
     }
-    .app-content {
-      padding: 0 40px 40px 40px;
-      max-width: 1400px;
+    .term-outlet {
       flex: 1;
-    }
-    @media (max-width: 768px) {
-      .app-content {
-        padding: 0 16px 24px 16px;
-      }
     }
   `]
 })

@@ -1,3 +1,5 @@
+@import './styles/tokens.css';
+
 /* You can add global styles to this file, and also import other style files */
 
 :root {
@@ -27,9 +29,10 @@
 body {
   margin: 0;
   padding: 0;
-  background-color: var(--bg-main);
-  color: var(--text-primary);
-  font-family: var(--font-family);
+  background-color: var(--ws-bg);
+  color: var(--ws-text);
+  font-family: var(--ws-font-sans);
+  letter-spacing: var(--ws-ls-tight);
   -webkit-font-smoothing: antialiased;
 }
 
@@ -98,14 +101,8 @@ h2 { font-size: 18px; }
   background: var(--text-secondary);
 }
 
-/* ── Route fade-in animation ── */
-.app-content > * {
-  animation: routeFadeIn 160ms ease-out;
-}
-@keyframes routeFadeIn {
-  from { opacity: 0; transform: translateY(6px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
+/* Route fade-in eliminado a propósito — el terminal "Terminal Pro" es estático
+   y serio (handoff §8: nada de fades/slides genéricos). */
 
 /* ── Skeleton loader ── */
 .skeleton {

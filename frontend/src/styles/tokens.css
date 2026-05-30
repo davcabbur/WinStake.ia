@@ -1,0 +1,97 @@
+/* WinStake.ia · Dashboard "Terminal Pro" — design tokens
+ * Fuente de verdad: design_handoff_dashboard_terminal/tokens.css
+ * Importado desde src/styles.css. No inventar hex codes fuera de esta paleta.
+ */
+
+:root {
+  /* ── Surfaces ─────────────────────────────────────────────── */
+  --ws-bg:        #08090c;          /* document background */
+  --ws-panel:     #0e1116;          /* main panel surface */
+  --ws-panel2:    #13171f;          /* nested card surface */
+  --ws-black:     #000000;          /* ticker + footer strip */
+
+  /* ── Lines / borders ──────────────────────────────────────── */
+  --ws-line:      rgba(255,255,255,0.06);
+  --ws-line2:     rgba(255,255,255,0.10);
+
+  /* ── Text ─────────────────────────────────────────────────── */
+  --ws-text:      #e6e8eb;          /* primary text */
+  --ws-dim:       #7a8090;          /* labels, metadata */
+  --ws-dim2:      #4a5160;          /* disabled, terciary */
+
+  /* ── Brand / accent ───────────────────────────────────────── */
+  --ws-amber:        #ffb020;       /* primary accent */
+  --ws-amber-soft:   rgba(255, 176, 32, 0.10);
+  --ws-amber-bg:     #1a1408;       /* dark amber wash (active tab) */
+  --ws-amber-glow:   0 0 10px rgba(255, 176, 32, 0.25);
+
+  /* ── Semantic ─────────────────────────────────────────────── */
+  --ws-win:       #3ddc97;          /* gain / up / win */
+  --ws-win-soft:  rgba(61, 220, 151, 0.18);
+  --ws-loss:      #ff5151;          /* loss / down */
+  --ws-loss-soft: rgba(255, 81, 81, 0.18);
+  --ws-pending:   #5b9dff;          /* pending / blue */
+
+  /* ── Sport accents ────────────────────────────────────────── */
+  --ws-laliga:    #5b9dff;          /* LaLiga = azul */
+  --ws-nba:       #ff8c4a;          /* NBA = naranja */
+
+  /* ── Typography ───────────────────────────────────────────── */
+  --ws-font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  --ws-font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* Sizes — usar estos tokens; no elegir px a mano en componentes */
+  --ws-text-kicker:   10px;         /* uppercase mono labels */
+  --ws-text-meta:     11px;         /* mono in tables, meta info */
+  --ws-text-body:     12px;         /* sans body */
+  --ws-text-cell:     13px;         /* mono cell values */
+  --ws-text-title:    14px;         /* panel titles */
+  --ws-text-page:     22px;         /* page H1 */
+  --ws-text-kpi:      24px;         /* big KPI numbers */
+
+  /* Letter spacings */
+  --ws-ls-tight:      -0.005em;     /* sans body */
+  --ws-ls-kicker:     0.14em;       /* mono uppercase */
+  --ws-ls-kicker-lg:  0.18em;       /* page-title kicker */
+  --ws-ls-mono-data:  0.04em;       /* mono in cells */
+
+  /* ── Spacing ──────────────────────────────────────────────── */
+  --ws-pad-cell:    8px 10px;       /* table cells */
+  --ws-pad-panel-y: 16px;
+  --ws-pad-panel-x: 20px;
+
+  /* ── Radii ────────────────────────────────────────────────── */
+  --ws-radius:       0;             /* terminal aesthetic — no rounding */
+  --ws-radius-dot:   50%;           /* status indicators only */
+
+  /* ── Effects ──────────────────────────────────────────────── */
+  --ws-shadow-none:  none;
+  --ws-pulse-win:    0 0 6px var(--ws-win);
+  --ws-pulse-amber:  0 0 6px var(--ws-amber);
+
+  /* ── Z-index ──────────────────────────────────────────────── */
+  --ws-z-ticker:     50;
+  --ws-z-header:     40;
+  --ws-z-tooltip:    100;
+}
+
+/* Status dot pulse (engine active, live match indicator) */
+@keyframes ws-pulse {
+  0%, 100% { box-shadow: 0 0 6px currentColor; }
+  50%      { box-shadow: 0 0 14px currentColor; }
+}
+
+/* Cell flash on odds update — aplicado brevemente vía JS */
+@keyframes ws-flash-up {
+  0%   { background-color: var(--ws-win-soft); }
+  100% { background-color: transparent; }
+}
+@keyframes ws-flash-down {
+  0%   { background-color: var(--ws-loss-soft); }
+  100% { background-color: transparent; }
+}
+
+.ws-pulse-engine { color: var(--ws-win); animation: ws-pulse 1.5s ease-in-out infinite; }
+.ws-pulse-live   { color: var(--ws-amber); animation: ws-pulse 1.5s ease-in-out infinite; }
+.ws-flash-up     { animation: ws-flash-up 600ms ease-out; }
+.ws-flash-down   { animation: ws-flash-down 600ms ease-out; }

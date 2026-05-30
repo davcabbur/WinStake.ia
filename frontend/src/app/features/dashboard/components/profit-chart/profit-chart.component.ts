@@ -1,348 +1,160 @@
-import { Component, Input, OnChanges } from '@angular/core';
+import { ChangeDetectionStrategy, Component, Input, OnChanges } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { ChartData } from '../../../../core/services/api.service';
-import { LocaleCurrencyPipe } from '../../../../shared/pipes/locale-currency.pipe';
+import { ChartPoint, ChartStats } from '../../dashboard.models';
 
-type Period = '7d' | '30d' | '90d' | 'all';
-interface DataPoint { x: number; y: number; date: string; value: number; profit: number; selection: string; index: number; }
-interface Segment { x1: number; y1: number; x2: number; y2: number; color: string; }
+interface YTick { v: number; y: number; zero: boolean; label: string; }
+interface XTick { x: number; label: string; }
+interface Seg { points: string; win: boolean; }
 
+/**
+ * Curva de beneficio (handoff §7.5). SVG inline, línea bicolor (win/loss según
+ * el signo), línea de cero sólida, resto de grid punteado. Sin gradientes ni
+ * sombras. Presentacional puro: recibe los puntos ya calculados.
+ */
 @Component({
   selector: 'app-profit-chart',
   standalone: true,
-  imports: [CommonModule, LocaleCurrencyPipe],
+  imports: [CommonModule],
+  changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <div class="glass-card chart-container">
-      <div class="chart-header">
-        <h2>Curva de Beneficio</h2>
-        <div class="chart-controls">
-          <div class="chart-filters">
-            <button *ngFor="let p of periods"
-              class="filter-btn"
-              [class.active]="selectedPeriod === p.key"
-              (click)="setPeriod(p.key)">{{ p.label }}</button>
-          </div>
-          <div class="chart-legend" *ngIf="chartData && chartData.dates.length > 0">
-            <span class="legend-item">
-              <span class="legend-dot" [style.background]="isPositive ? '#10b981' : '#ef4444'"></span>
-              Profit acumulado
-            </span>
-          </div>
+    <div class="panel">
+      <div class="phead">
+        <div>
+          <div class="kicker">CHART · P/L CUMULATIVE · {{ points.length }}D</div>
+          <div class="title">Curva de Beneficio</div>
+        </div>
+        <div class="hstats" *ngIf="stats">
+          <span>HIGH <span class="win">{{ eur(stats.high) }}</span> · {{ stats.highDate }}</span>
+          <span>LOW <span class="loss">{{ eur(stats.low) }}</span> · {{ stats.lowDate }}</span>
+          <span>VOL σ <span class="t">{{ eur(stats.vol, false) }}</span></span>
         </div>
       </div>
 
-      <div class="chart-body" *ngIf="chartData && chartData.dates.length > 0 && !filteredEmpty">
+      <svg *ngIf="points.length > 1" [attr.viewBox]="'0 0 ' + W + ' ' + H" width="100%" [attr.height]="H" class="chart">
+        <g class="grid">
+          <line *ngFor="let t of yTicks" [attr.x1]="padL" [attr.x2]="W - padR" [attr.y1]="t.y" [attr.y2]="t.y"
+                [class.zero]="t.zero" [class.dash]="!t.zero" />
+          <text *ngFor="let t of yTicks" class="axis" [attr.x]="padL - 8" [attr.y]="t.y + 4" text-anchor="end">{{ t.label }}</text>
+        </g>
+        <text *ngFor="let t of xTicks" class="axis" [attr.x]="t.x" [attr.y]="H - 10" text-anchor="middle">{{ t.label }}</text>
 
-        <!-- Y-axis labels -->
-        <div class="y-axis">
-          <span class="y-label">{{ maxVal | localeCurrency:0:0 }}</span>
-          <span class="y-label">{{ midVal | localeCurrency:0:0 }}</span>
-          <span class="y-label">{{ minVal | localeCurrency:0:0 }}</span>
-        </div>
+        <polyline *ngFor="let s of segments" class="seg" [class.win]="s.win" [class.loss]="!s.win"
+                  fill="none" [attr.points]="s.points" />
 
-        <div class="chart-area" (mousemove)="onMouseMove($event)" (mouseleave)="tooltip = null">
-          <svg [attr.viewBox]="'0 0 ' + svgWidth + ' ' + svgHeight" preserveAspectRatio="none" class="chart-svg">
-            <!-- Grid lines -->
-            <line *ngFor="let y of gridLines"
-              [attr.x1]="padding" [attr.y1]="y"
-              [attr.x2]="svgWidth - padding" [attr.y2]="y"
-              class="grid-line" />
+        <g *ngIf="last">
+          <circle [attr.cx]="last.x" [attr.cy]="last.y" r="3" class="dot-loss" />
+          <rect [attr.x]="last.x - 56" [attr.y]="last.y - 22" width="52" height="16" class="lbl-box" />
+          <text [attr.x]="last.x - 30" [attr.y]="last.y - 11" text-anchor="middle" class="lbl-txt">{{ last.label }}</text>
+        </g>
+      </svg>
 
-            <!-- Zero line -->
-            <line [attr.x1]="padding" [attr.y1]="zeroY"
-                  [attr.x2]="svgWidth - padding" [attr.y2]="zeroY"
-                  class="zero-line" />
-
-            <defs>
-              <linearGradient id="profitGrad" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stop-color="#6b7280" stop-opacity="0.12" />
-                <stop offset="100%" stop-color="#6b7280" stop-opacity="0.01" />
-              </linearGradient>
-            </defs>
-
-            <path [attr.d]="areaPath" fill="url(#profitGrad)" />
-
-            <!-- Per-segment colored line: green if going up, red if going down -->
-            <line *ngFor="let s of segments"
-              [attr.x1]="s.x1" [attr.y1]="s.y1"
-              [attr.x2]="s.x2" [attr.y2]="s.y2"
-              [attr.stroke]="s.color"
-              stroke-width="2" stroke-linecap="round" />
-
-            <!-- Hover indicator line -->
-            <line *ngIf="tooltip"
-              [attr.x1]="tooltip.x" [attr.y1]="padding"
-              [attr.x2]="tooltip.x" [attr.y2]="svgHeight - padding"
-              stroke="rgba(255,255,255,0.15)" stroke-width="1" stroke-dasharray="3 3" />
-
-            <!-- Hover dot -->
-            <circle *ngIf="tooltip"
-              [attr.cx]="tooltip.x" [attr.cy]="tooltip.y" r="4"
-              [attr.fill]="isPositive ? '#10b981' : '#ef4444'"
-              stroke="var(--bg-main)" stroke-width="2" />
-
-            <!-- Data points (visible on hover via CSS) -->
-            <circle *ngFor="let p of dataPoints"
-              [attr.cx]="p.x" [attr.cy]="p.y" r="3"
-              [attr.fill]="isPositive ? '#10b981' : '#ef4444'"
-              class="data-point" />
-          </svg>
-
-          <!-- Floating tooltip -->
-          <div class="tooltip" *ngIf="tooltip"
-            [style.left.px]="tooltipX"
-            [style.top.px]="0">
-            <div class="tooltip-index">#{{ tooltip.index }} · {{ tooltip.date }}</div>
-            <div class="tooltip-selection">{{ tooltip.selection }}</div>
-            <div class="tooltip-profit" [class.positive]="!isNeg(tooltip.profit)" [class.negative]="isNeg(tooltip.profit)">
-              {{ !isNeg(tooltip.profit) ? '+' : '' }}{{ tooltip.profit | localeCurrency:2:2:true }}
-            </div>
-            <div class="tooltip-value" [class.positive]="!isNeg(tooltip.value)" [class.negative]="isNeg(tooltip.value)">
-              Acum: {{ tooltip.value | localeCurrency:2:2:true }}
-            </div>
-          </div>
-        </div>
-
-        <!-- X-axis labels -->
-        <div class="x-labels">
-          <span *ngFor="let label of xLabels" class="x-label">{{ label }}</span>
-        </div>
-      </div>
-
-      <div class="empty-state" *ngIf="filteredEmpty && chartData && chartData.dates.length > 0">
-        <p>Sin apuestas en el período seleccionado.</p>
-      </div>
-
-      <div class="empty-state" *ngIf="!chartData || chartData.dates.length === 0">
-        <p>Sin datos de rendimiento aun. Ejecuta analisis y registra resultados para ver la curva.</p>
+      <div class="empty" *ngIf="points.length <= 1">
+        Sin datos de rendimiento suficientes. Registra resultados para ver la curva.
       </div>
     </div>
   `,
   styles: [`
-    .chart-container { margin-bottom: 32px; }
-    .chart-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
-    .chart-controls { display: flex; align-items: center; gap: 16px; }
-    .chart-filters { display: flex; gap: 4px; }
-    .filter-btn {
-      padding: 3px 10px;
-      font-size: 11px;
-      border: 1px solid var(--border-color);
-      border-radius: 4px;
-      background: transparent;
-      color: var(--text-secondary);
-      cursor: pointer;
-      transition: all 0.15s;
-    }
-    .filter-btn:hover { color: var(--text-primary); border-color: var(--text-secondary); }
-    .filter-btn.active { background: var(--accent-color, #6366f1); color: #fff; border-color: transparent; }
-    .chart-legend { display: flex; gap: 16px; }
-    .legend-item { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); }
-    .legend-dot { width: 8px; height: 8px; border-radius: 50%; }
+    .panel { background: var(--ws-panel); padding: 16px 20px; }
+    .phead { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+    .kicker { font-family: var(--ws-font-mono); font-size: var(--ws-text-kicker); color: var(--ws-dim); letter-spacing: var(--ws-ls-kicker); }
+    .title { font-size: var(--ws-text-title); font-weight: 600; margin-top: 2px; }
+    .hstats { display: flex; gap: 16px; font-family: var(--ws-font-mono); font-size: var(--ws-text-meta); color: var(--ws-dim); }
+    .hstats .win { color: var(--ws-win); }
+    .hstats .loss { color: var(--ws-loss); }
+    .hstats .t { color: var(--ws-text); }
 
-    .chart-body { display: flex; flex-direction: column; gap: 0; }
-    .y-axis {
-      display: flex;
-      flex-direction: column;
-      justify-content: space-between;
-      position: absolute;
-      right: calc(100% + 4px);
-      top: 0; bottom: 20px;
-      font-size: 10px;
-      color: var(--text-secondary);
-      text-align: right;
-      pointer-events: none;
-    }
-    .chart-area { position: relative; }
+    .chart { display: block; }
+    .grid line.zero { stroke: var(--ws-line2); }
+    .grid line.dash { stroke: var(--ws-line); stroke-dasharray: 2 4; }
+    .axis { fill: var(--ws-dim); font-size: 11px; font-family: var(--ws-font-mono); }
+    .seg { stroke-width: 1.6; }
+    .seg.win { stroke: var(--ws-win); }
+    .seg.loss { stroke: var(--ws-loss); }
+    .dot-loss { fill: var(--ws-loss); }
+    .lbl-box { fill: var(--ws-loss); fill-opacity: 0.15; stroke: var(--ws-loss); stroke-opacity: 0.4; }
+    .lbl-txt { fill: var(--ws-loss); font-size: 10px; font-family: var(--ws-font-mono); }
 
-    .chart-svg { width: 100%; height: 200px; display: block; }
-
-    .grid-line { stroke: var(--border-color); stroke-width: 0.5; stroke-dasharray: 4 4; }
-    .zero-line { stroke: var(--text-secondary); stroke-width: 0.5; opacity: 0.4; }
-    .data-point { opacity: 0; transition: opacity 0.2s; }
-    .chart-svg:hover .data-point { opacity: 0.6; }
-
-    .x-labels { display: flex; justify-content: space-between; padding: 8px 0 0 0; }
-    .x-label { font-size: 11px; color: var(--text-secondary); }
-
-    /* Tooltip */
-    .tooltip {
-      position: absolute;
-      background: var(--bg-surface);
-      border: 1px solid var(--border-color);
-      border-radius: 8px;
-      padding: 8px 12px;
-      pointer-events: none;
-      white-space: nowrap;
-      transform: translateX(-50%);
-      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-      z-index: 10;
-    }
-    .tooltip-index { font-size: 11px; color: var(--text-secondary); margin-bottom: 2px; }
-    .tooltip-selection { font-size: 12px; color: var(--text-primary); margin-bottom: 4px; }
-    .tooltip-profit { font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; }
-    .tooltip-profit.positive { color: var(--status-success-text); }
-    .tooltip-profit.negative { color: var(--status-error-text); }
-    .tooltip-value { font-size: 12px; color: var(--text-secondary); margin-top: 2px; font-variant-numeric: tabular-nums; }
-    .tooltip-value.positive { color: var(--status-success-text); }
-    .tooltip-value.negative { color: var(--status-error-text); }
-
-    .empty-state { text-align: center; padding: 40px; color: var(--text-secondary); font-size: 14px; }
+    .empty { text-align: center; padding: 60px 20px; color: var(--ws-dim); font-size: var(--ws-text-body); }
   `]
 })
 export class ProfitChartComponent implements OnChanges {
-  @Input() chartData: ChartData | null = null;
+  @Input() points: ChartPoint[] = [];
+  @Input() stats: ChartStats | null = null;
 
-  svgWidth = 800;
-  svgHeight = 200;
-  padding = 10;
+  readonly W = 1352;
+  readonly H = 320;
+  readonly padL = 56;
+  readonly padR = 16;
+  readonly padT = 24;
+  readonly padB = 32;
 
-  linePath = '';
-  areaPath = '';
-  dataPoints: DataPoint[] = [];
-  segments: Segment[] = [];
-  gridLines: number[] = [];
-  xLabels: string[] = [];
-  zeroY = 100;
-  isPositive = true;
-  filteredEmpty = false;
-  minVal = 0;
-  maxVal = 0;
-  midVal = 0;
-
-  selectedPeriod: Period = 'all';
-  readonly periods: { key: Period; label: string }[] = [
-    { key: '7d',  label: '7D'  },
-    { key: '30d', label: '30D' },
-    { key: '90d', label: '3M'  },
-    { key: 'all', label: 'Todo' },
-  ];
-
-  tooltip: { x: number; y: number; date: string; value: number; profit: number; selection: string; index: number } | null = null;
-  tooltipX = 0;
+  yTicks: YTick[] = [];
+  xTicks: XTick[] = [];
+  segments: Seg[] = [];
+  last: { x: number; y: number; label: string } | null = null;
 
   ngOnChanges() {
-    if (this.chartData && this.chartData.dates.length > 0) this.buildChart();
+    this.build();
   }
 
-  setPeriod(p: Period) {
-    this.selectedPeriod = p;
-    if (this.chartData && this.chartData.dates.length > 0) this.buildChart();
+  eur(v: number, sign = true): string {
+    const s = v.toFixed(2).replace('.', ',') + ' €';
+    return sign && v > 0 ? '+' + s : s;
   }
 
-  isNeg(val: number): boolean {
-    return val < 0 || Object.is(val, -0);
-  }
+  private build() {
+    const data = this.points;
+    if (data.length <= 1) { this.yTicks = []; this.xTicks = []; this.segments = []; this.last = null; return; }
 
-  private buildChart() {
-    const data = this.chartData!;
+    const vals = data.map(p => p.v);
+    const min = Math.min(...vals, 0);
+    const max = Math.max(...vals, 0);
+    const range = (max - min) || 1;
 
-    // Time filter: find the slice start index based on selected period
-    let sliceStart = 0;
-    if (this.selectedPeriod !== 'all') {
-      const days = ({ '7d': 7, '30d': 30, '90d': 90 } as Record<string, number>)[this.selectedPeriod];
-      const cutoff = new Date();
-      cutoff.setDate(cutoff.getDate() - days);
-      const cutoffStr = cutoff.toISOString().substring(0, 10);
-      const idx = data.dates.findIndex(d => d >= cutoffStr);
-      sliceStart = idx === -1 ? data.dates.length : idx;
-    }
+    const x = (i: number) => this.padL + (this.W - this.padL - this.padR) * (i / (data.length - 1));
+    const y = (v: number) => this.padT + (this.H - this.padT - this.padB) * (1 - (v - min) / range);
+    const zeroY = y(0);
 
-    const rawDates       = data.dates.slice(sliceStart);
-    const rawValues      = data.cumulative_profit.slice(sliceStart);
-    const rawProfitsAll  = (data.profits    ?? []).slice(sliceStart);
-    const rawSelectAll   = (data.selections ?? []).slice(sliceStart);
-
-    this.filteredEmpty = rawDates.length === 0;
-    if (this.filteredEmpty) { this.dataPoints = []; this.segments = []; this.linePath = ''; this.areaPath = ''; return; }
-
-    // Single data point collapses to a dot — prepend a zero baseline so the line is visible
-    const isSingle = rawDates.length === 1;
-    const dates          = isSingle ? ['Inicio', ...rawDates]      : rawDates;
-    const values         = isSingle ? [0,         ...rawValues]    : rawValues;
-    const rawProfits     = isSingle ? [0,         ...rawProfitsAll]: rawProfitsAll;
-    const rawSelections  = isSingle ? ['',        ...rawSelectAll] : rawSelectAll;
-    const n = values.length;
-
-    this.minVal = Math.min(0, ...values);
-    this.maxVal = Math.max(0, ...values);
-    this.midVal = Math.round((this.minVal + this.maxVal) / 2);
-
-    const range  = this.maxVal - this.minVal || 1;
-    const chartW = this.svgWidth  - this.padding * 2;
-    const chartH = this.svgHeight - this.padding * 2;
-
-    this.isPositive = !this.isNeg(values[values.length - 1]);
-    this.zeroY = this.padding + ((this.maxVal - 0) / range) * chartH;
-
-    this.gridLines = [0, 1, 2, 3, 4].map(i => this.padding + (i / 4) * chartH);
-
-    this.dataPoints = values.map((val, i) => {
-      const isSynth = isSingle && i === 0;
-      return {
-        x: this.padding + (i / (n - 1 || 1)) * chartW,
-        y: this.padding + ((this.maxVal - val) / range) * chartH,
-        date: dates[i],
-        value: val,
-        profit: rawProfits[i]    ?? 0,
-        selection: rawSelections[i] ?? '',
-        // global 1-based bet number; synthetic baseline = 0
-        index: isSynth ? 0 : sliceStart + (isSingle ? i : i + 1),
-      };
+    // Y ticks
+    this.yTicks = [max, max * 0.5, 0, min * 0.5, min].map(v => {
+      const r = Math.round(v);
+      return { v: r, y: y(r), zero: r === 0, label: `${r >= 0 ? '+' : ''}${r}€` };
     });
 
-    this.linePath = this.dataPoints.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
-    const lastX  = this.dataPoints[n - 1].x;
-    const firstX = this.dataPoints[0].x;
-    this.areaPath = this.linePath + ` L ${lastX} ${this.zeroY} L ${firstX} ${this.zeroY} Z`;
+    // X ticks — 6 índices repartidos
+    this.xTicks = [0, 1, 2, 3, 4, 5].map(k => {
+      const i = Math.round((k * (data.length - 1)) / 5);
+      return { x: x(i), label: data[i].d };
+    });
 
-    this.segments = [];
-    for (let i = 0; i < this.dataPoints.length - 1; i++) {
-      const a = this.dataPoints[i];
-      const b = this.dataPoints[i + 1];
-      const v1 = a.value;
-      const v2 = b.value;
-
-      if (v1 >= 0 && v2 >= 0) {
-        this.segments.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, color: '#10b981' });
-      } else if (v1 < 0 && v2 < 0) {
-        this.segments.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, color: '#ef4444' });
-      } else if (v1 >= 0 && v2 < 0) {
-        // Positive → negative: split at zero crossing
-        const t = v1 / (v1 - v2);
-        const xc = a.x + t * (b.x - a.x);
-        this.segments.push({ x1: a.x,  y1: a.y,        x2: xc,  y2: this.zeroY, color: '#10b981' });
-        this.segments.push({ x1: xc,   y1: this.zeroY, x2: b.x, y2: b.y,        color: '#ef4444' });
+    // Segmentos bicolor con intersección en y=0
+    const segs: Seg[] = [];
+    let cur: { sign: number; pts: [number, number][] } = { sign: data[0].v >= 0 ? 1 : -1, pts: [[x(0), y(data[0].v)]] };
+    for (let i = 1; i < data.length; i++) {
+      const sgn = data[i].v >= 0 ? 1 : -1;
+      if (sgn !== cur.sign) {
+        const v0 = data[i - 1].v, v1 = data[i].v;
+        const t = v0 / (v0 - v1);
+        const xi = x(i - 1) + (x(i) - x(i - 1)) * t;
+        cur.pts.push([xi, zeroY]);
+        segs.push({ points: ptsToStr(cur.pts), win: cur.sign === 1 });
+        cur = { sign: sgn, pts: [[xi, zeroY], [x(i), y(data[i].v)]] };
       } else {
-        // Negative → positive: split at zero crossing
-        const t = (-v1) / (v2 - v1);
-        const xc = a.x + t * (b.x - a.x);
-        this.segments.push({ x1: a.x,  y1: a.y,        x2: xc,  y2: this.zeroY, color: '#ef4444' });
-        this.segments.push({ x1: xc,   y1: this.zeroY, x2: b.x, y2: b.y,        color: '#10b981' });
+        cur.pts.push([x(i), y(data[i].v)]);
       }
     }
+    segs.push({ points: ptsToStr(cur.pts), win: cur.sign === 1 });
+    this.segments = segs;
 
-    const step = Math.max(1, Math.floor(n / 6));
-    this.xLabels = [];
-    for (let i = 0; i < n; i += step) this.xLabels.push(dates[i].length > 5 ? dates[i].substring(5) : dates[i]);
-    const last = dates[n - 1];
-    const lastLabel = last.length > 5 ? last.substring(5) : last;
-    if (this.xLabels[this.xLabels.length - 1] !== lastLabel) this.xLabels.push(lastLabel);
+    const lastPt = data[data.length - 1];
+    this.last = {
+      x: x(data.length - 1),
+      y: y(lastPt.v),
+      label: lastPt.v.toFixed(2).replace('.', ',') + '€',
+    };
   }
+}
 
-  onMouseMove(event: MouseEvent) {
-    if (!this.dataPoints.length) return;
-    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
-    const relX   = event.clientX - rect.left;
-    const svgRelX = (relX / rect.width) * this.svgWidth;
-
-    let nearest = this.dataPoints[0];
-    let minDist = Math.abs(svgRelX - nearest.x);
-    for (const p of this.dataPoints) {
-      const d = Math.abs(svgRelX - p.x);
-      if (d < minDist) { minDist = d; nearest = p; }
-    }
-
-    this.tooltip = { x: nearest.x, y: nearest.y, date: nearest.date, value: nearest.value, profit: nearest.profit, selection: nearest.selection, index: nearest.index };
-    this.tooltipX = (nearest.x / this.svgWidth) * rect.width;
-  }
+function ptsToStr(pts: [number, number][]): string {
+  return pts.map(p => `${p[0]},${p[1]}`).join(' ');
 }
