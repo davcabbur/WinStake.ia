@@ -3,7 +3,6 @@
 from unittest.mock import MagicMock
 
 import requests
-import pytest
 
 from src.cache import APICache
 from src.worldcup_client import WorldCupClient
@@ -41,7 +40,7 @@ def test_request_injects_key_and_lang(tmp_path):
     c.get_livescores()
     _, kwargs = c.session.get.call_args
     assert kwargs["params"]["key"] == "testkey"
-    assert kwargs["params"]["lang"] == "es"
+    assert kwargs["params"]["lang"] == c.lang
 
 
 def test_livescores_url_and_return(tmp_path):
@@ -76,4 +75,10 @@ def test_cache_key_varies_with_lang(tmp_path):
 def test_http_error_returns_none(tmp_path):
     c = _client(tmp_path)
     c.session.get = MagicMock(return_value=_fake_response(None, status_ok=False))
+    assert c.get_livescores() is None
+
+
+def test_connection_error_returns_none(tmp_path):
+    c = _client(tmp_path)
+    c.session.get = MagicMock(side_effect=requests.exceptions.ConnectionError("timeout"))
     assert c.get_livescores() is None

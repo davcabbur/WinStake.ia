@@ -44,8 +44,12 @@ class WorldCupClient:
         if not self.api_key:
             logger.warning("⚠️  WORLD_CUP_API_KEY no configurada. Las llamadas devolverán None.")
 
-    def _request(self, endpoint: str, params: dict) -> Optional[dict]:
-        """Realiza una petición GET. Inyecta key y lang automáticamente."""
+    def _request(self, endpoint: str, params: dict) -> Optional[dict | list]:
+        """Realiza una petición GET. Inyecta key y lang automáticamente.
+
+        Devuelve el JSON crudo de la API tal cual (dict o list); el llamante
+        es responsable de desempaquetar/normalizar el shape. None en error.
+        """
         full_params = {"key": self.api_key, "lang": self.lang, **params}
         try:
             url = f"{self.base_url}/{endpoint}"
