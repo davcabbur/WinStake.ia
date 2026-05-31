@@ -235,3 +235,69 @@ def test_cards_url(tmp_path):
     c.get_cards()
     args, _ = c.session.get.call_args
     assert args[0].endswith("/cards")
+
+
+# ── Parsers de normalización (shapes reales de worldcupapi.com, 2026-05-31) ──
+
+_REAL_FIXTURE = {
+    "round": "1", "date": "2026-06-11", "time": "19:00:00",
+    "home": {"name": "Mexico", "logo": "https://cdn.worldcupapi.com/teams/1450.png", "id": 1450},
+    "group_id": 4286,
+    "away": {"name": "South Africa", "logo": "https://cdn.worldcupapi.com/teams/2767.png", "id": 2767},
+    "odds": {"pre": {"1": 1.54, "2": 7, "X": 4.3}},
+    "location": "Estadio Azteca, Mexico City",
+    "id": 1825339,
+}
+
+_REAL_STANDING = {
+    "rank": 1, "points": 0, "matches": 0, "goal_diff": 0,
+    "goals_scored": 0, "goals_conceded": 0, "lost": 0, "drawn": 0, "won": 0,
+    "team": {"id": 1722, "name": "Czech Republic", "logo": "https://cdn.worldcupapi.com/teams/1722.png"},
+}
+
+
+def test_parse_fixture():
+    from src.worldcup_client import parse_fixture
+    f = parse_fixture(_REAL_FIXTURE)
+    assert f["id"] == 1825339
+    assert f["round"] == "1"
+    assert f["date"] == "2026-06-11" and f["time"] == "19:00:00"
+    assert f["home_team"] == "Mexico" and f["home_id"] == 1450
+    assert f["away_team"] == "South Africa" and f["away_id"] == 2767
+    assert f["group_id"] == 4286
+    assert f["location"] == "Estadio Azteca, Mexico City"
+    assert f["odds_1x2"] == {"home": 1.54, "draw": 4.3, "away": 7}
+
+
+def test_parse_fixture_missing_odds_is_defensive():
+    from src.worldcup_client import parse_fixture
+    raw = {k: v for k, v in _REAL_FIXTURE.items() if k != "odds"}
+    f = parse_fixture(raw)
+    assert f["odds_1x2"] == {"home": None, "draw": None, "away": None}
+    # campos núcleo siguen presentes
+    assert f["home_team"] == "Mexico" and f["id"] == 1825339
+
+
+def test_parse_fixtures_list_and_empty():
+    from src.worldcup_client import parse_fixtures
+    parsed = parse_fixtures([_REAL_FIXTURE])
+    assert len(parsed) == 1 and parsed[0]["home_team"] == "Mexico"
+    assert parse_fixtures(None) == []
+    assert parse_fixtures([]) == []
+
+
+def test_parse_standing():
+    from src.worldcup_client import parse_standing
+    s = parse_standing(_REAL_STANDING)
+    assert s["rank"] == 1
+    assert s["team_id"] == 1722 and s["team_name"] == "Czech Republic"
+    assert s["points"] == 0 and s["played"] == 0
+    assert s["won"] == 0 and s["drawn"] == 0 and s["lost"] == 0
+    assert s["goals_for"] == 0 and s["goals_against"] == 0 and s["goal_diff"] == 0
+
+
+def test_parse_standings_list_and_empty():
+    from src.worldcup_client import parse_standings
+    parsed = parse_standings([_REAL_STANDING])
+    assert len(parsed) == 1 and parsed[0]["team_name"] == "Czech Republic"
+    assert parse_standings(None) == []
