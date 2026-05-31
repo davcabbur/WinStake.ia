@@ -115,3 +115,34 @@ class WorldCupClient:
             "livestandings", {"group": group}, config.CACHE_TTL_WC_LIVE,
             f"wc_livestandings_{group}_{self.lang}",
         )
+
+    def get_commentary(self, match_id, from_=None, to=None):
+        """Narración minuto a minuto. GET /commentary (from/to en segundos)."""
+        params = {"match_id": match_id}
+        if from_ is not None:
+            params["from"] = from_
+        if to is not None:
+            params["to"] = to
+        cache_key = f"wc_commentary_{match_id}_{from_}_{to}_{self.lang}"
+        return self._cached_get("commentary", params, config.CACHE_TTL_WC_MATCH, cache_key)
+
+    def get_events(self, match_id):
+        """Goles, tarjetas y cambios. GET /events."""
+        return self._cached_get(
+            "events", {"match_id": match_id}, config.CACHE_TTL_WC_MATCH,
+            f"wc_events_{match_id}_{self.lang}",
+        )
+
+    def get_statistics(self, match_id):
+        """Estadísticas del partido. GET /statistics (la API ignora lang aquí)."""
+        return self._cached_get(
+            "statistics", {"match_id": match_id}, config.CACHE_TTL_WC_MATCH,
+            f"wc_statistics_{match_id}_{self.lang}",
+        )
+
+    def get_lineups(self, match_id):
+        """Alineaciones. GET /lineups."""
+        return self._cached_get(
+            "lineups", {"match_id": match_id}, config.CACHE_TTL_WC_MATCH,
+            f"wc_lineups_{match_id}_{self.lang}",
+        )

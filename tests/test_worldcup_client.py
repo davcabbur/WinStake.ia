@@ -130,3 +130,50 @@ def test_live_standings_url(tmp_path):
     args, kwargs = c.session.get.call_args
     assert args[0].endswith("/livestandings")
     assert kwargs["params"]["group"] == "A"
+
+
+def test_commentary_with_from_to(tmp_path):
+    c = _client(tmp_path)
+    c.session.get = MagicMock(return_value=_fake_response({}))
+    c.get_commentary(335680, from_=1000, to=2000)
+    args, kwargs = c.session.get.call_args
+    assert args[0].endswith("/commentary")
+    p = kwargs["params"]
+    assert p["match_id"] == 335680
+    assert p["from"] == 1000
+    assert p["to"] == 2000
+
+
+def test_commentary_omits_optional(tmp_path):
+    c = _client(tmp_path)
+    c.session.get = MagicMock(return_value=_fake_response({}))
+    c.get_commentary(335680)
+    _, kwargs = c.session.get.call_args
+    assert "from" not in kwargs["params"] and "to" not in kwargs["params"]
+
+
+def test_events_url(tmp_path):
+    c = _client(tmp_path)
+    c.session.get = MagicMock(return_value=_fake_response({}))
+    c.get_events(335680)
+    args, kwargs = c.session.get.call_args
+    assert args[0].endswith("/events")
+    assert kwargs["params"]["match_id"] == 335680
+
+
+def test_statistics_url(tmp_path):
+    c = _client(tmp_path)
+    c.session.get = MagicMock(return_value=_fake_response({}))
+    c.get_statistics(335680)
+    args, kwargs = c.session.get.call_args
+    assert args[0].endswith("/statistics")
+    assert kwargs["params"]["match_id"] == 335680
+
+
+def test_lineups_url(tmp_path):
+    c = _client(tmp_path)
+    c.session.get = MagicMock(return_value=_fake_response({}))
+    c.get_lineups(335680)
+    args, kwargs = c.session.get.call_args
+    assert args[0].endswith("/lineups")
+    assert kwargs["params"]["match_id"] == 335680
