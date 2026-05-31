@@ -88,3 +88,30 @@ class WorldCupClient:
             "livescores", {}, config.CACHE_TTL_WC_LIVE,
             f"wc_livescores_{self.lang}",
         )
+
+    def get_fixtures(self, group=None, team_id=None, date=None):
+        """Partidos / calendario. GET /fixtures (group, team_id o date opcionales)."""
+        params = {}
+        if group is not None:
+            params["group"] = group
+        if team_id is not None:
+            params["team_id"] = team_id
+        if date is not None:
+            params["date"] = date
+        cache_key = f"wc_fixtures_{group}_{team_id}_{date}_{self.lang}"
+        return self._cached_get("fixtures", params, config.CACHE_TTL_WC_FIXTURES, cache_key)
+
+    def get_standings(self, group, form=False):
+        """Clasificación de grupo. GET /standings (form=1 añade racha)."""
+        params = {"group": group}
+        if form:
+            params["form"] = 1
+        cache_key = f"wc_standings_{group}_{int(form)}_{self.lang}"
+        return self._cached_get("standings", params, config.CACHE_TTL_WC_STANDINGS, cache_key)
+
+    def get_live_standings(self, group):
+        """Clasificación en vivo. GET /livestandings."""
+        return self._cached_get(
+            "livestandings", {"group": group}, config.CACHE_TTL_WC_LIVE,
+            f"wc_livestandings_{group}_{self.lang}",
+        )

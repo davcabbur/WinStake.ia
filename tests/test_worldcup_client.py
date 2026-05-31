@@ -82,3 +82,51 @@ def test_connection_error_returns_none(tmp_path):
     c = _client(tmp_path)
     c.session.get = MagicMock(side_effect=requests.exceptions.ConnectionError("timeout"))
     assert c.get_livescores() is None
+
+
+def test_fixtures_optional_params_omitted(tmp_path):
+    c = _client(tmp_path)
+    c.session.get = MagicMock(return_value=_fake_response({"r": []}))
+    c.get_fixtures(group="A")
+    _, kwargs = c.session.get.call_args
+    p = kwargs["params"]
+    assert p["group"] == "A"
+    assert "team_id" not in p and "date" not in p
+
+
+def test_fixtures_team_and_date(tmp_path):
+    c = _client(tmp_path)
+    c.session.get = MagicMock(return_value=_fake_response({}))
+    c.get_fixtures(team_id=1443, date="2026-06-11")
+    args, kwargs = c.session.get.call_args
+    assert args[0].endswith("/fixtures")
+    assert kwargs["params"]["team_id"] == 1443
+    assert kwargs["params"]["date"] == "2026-06-11"
+    assert "group" not in kwargs["params"]
+
+
+def test_standings_form_flag(tmp_path):
+    c = _client(tmp_path)
+    c.session.get = MagicMock(return_value=_fake_response({}))
+    c.get_standings(group="B", form=True)
+    args, kwargs = c.session.get.call_args
+    assert args[0].endswith("/standings")
+    assert kwargs["params"]["group"] == "B"
+    assert kwargs["params"]["form"] == 1
+
+
+def test_standings_no_form_by_default(tmp_path):
+    c = _client(tmp_path)
+    c.session.get = MagicMock(return_value=_fake_response({}))
+    c.get_standings(group="C")
+    _, kwargs = c.session.get.call_args
+    assert "form" not in kwargs["params"]
+
+
+def test_live_standings_url(tmp_path):
+    c = _client(tmp_path)
+    c.session.get = MagicMock(return_value=_fake_response({}))
+    c.get_live_standings("A")
+    args, kwargs = c.session.get.call_args
+    assert args[0].endswith("/livestandings")
+    assert kwargs["params"]["group"] == "A"
