@@ -169,7 +169,9 @@ class WorldCupClient:
     def get_head2head(self, team1_id, team2_id):
         """Cara a cara histórico entre dos selecciones. GET /head2head."""
         params = {"team1_id": team1_id, "team2_id": team2_id}
-        cache_key = f"wc_head2head_{team1_id}_{team2_id}_{self.lang}"
+        # Cache key normalizada (min/max) — el h2h es simétrico, así (A,B) y (B,A)
+        # comparten entrada y no gastan dos requests. Coincide con FootballClient.get_h2h.
+        cache_key = f"wc_head2head_{min(team1_id, team2_id)}_{max(team1_id, team2_id)}_{self.lang}"
         return self._cached_get("head2head", params, config.CACHE_TTL_WC_STATIC, cache_key)
 
     def get_top_scorers(self):

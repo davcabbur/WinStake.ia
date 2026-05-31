@@ -35,12 +35,14 @@ def test_empty_key_no_http(tmp_path):
 
 
 def test_request_injects_key_and_lang(tmp_path):
-    c = _client(tmp_path)
+    # lang explícito y distinto del default para verificar que se inyecta de verdad
+    # (no tautológico) y de forma independiente de WINSTAKE_WC_LANG en el entorno.
+    c = _client(tmp_path, lang="fr")
     c.session.get = MagicMock(return_value=_fake_response({"ok": 1}))
     c.get_livescores()
     _, kwargs = c.session.get.call_args
     assert kwargs["params"]["key"] == "testkey"
-    assert kwargs["params"]["lang"] == c.lang
+    assert kwargs["params"]["lang"] == "fr"
 
 
 def test_livescores_url_and_return(tmp_path):
