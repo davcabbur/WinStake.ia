@@ -76,15 +76,7 @@ interface TickerItem {
   `]
 })
 export class TickerStripComponent implements OnInit, OnDestroy {
-  // HANDOFF-DEVIATION: datos mock (ver doc del componente).
-  readonly items: TickerItem[] = [
-    { code: 'RMA-ATM', h: 1.95, d: 3.40, a: 4.20, move: -0.05 },
-    { code: 'LAL-BOS', h: 2.10, d: null, a: 1.78, move: 0.03 },
-    { code: 'ATH-RSO', h: 2.50, d: 3.10, a: 2.80, move: null },
-    { code: 'BUC-MIA', h: 1.62, d: null, a: 2.35, move: 0.04 },
-    { code: 'GIR-VAL', h: 1.85, d: 3.60, a: 4.10, move: null },
-    { code: 'VIL-BET', h: 2.05, d: 3.30, a: 3.60, move: -0.05 },
-  ];
+  items: TickerItem[] = [];
 
   readonly utc = signal('');
   private timer: ReturnType<typeof setInterval> | null = null;

@@ -1,11 +1,14 @@
 import asyncio
 import json
-import random
 import logging
 from typing import List
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
+from src.odds_client import OddsClient
+
 logger = logging.getLogger(__name__)
+
+_odds_client = OddsClient()
 
 class ConnectionManager:
     def __init__(self):
@@ -49,7 +52,7 @@ def setup_websockets(app: FastAPI):
         await manager.connect(websocket)
         try:
             # Enviar initial payload
-            await emit_mock_odds()
+            await emit_real_odds()
             while True:
                 # Keep connection alive, wait for client messages if needed
                 data = await websocket.receive_text()
@@ -62,26 +65,47 @@ def setup_websockets(app: FastAPI):
         asyncio.create_task(odds_generator_task())
 
 
-async def emit_mock_odds():
-    """Genera una actualización simulada de cuotas y la envía vía WebSocket."""
-    # Simulamos fluctuación de cuotas de mercado (para ahorrar API requests)
-    matches = [
-        {"id": "mat_1", "home": "Real Madrid", "away": "Barcelona", "home_odd": round(random.uniform(2.10, 2.30), 2), "away_odd": round(random.uniform(2.80, 3.10), 2), "draw_odd": round(random.uniform(3.20, 3.50), 2)},
-        {"id": "mat_2", "home": "Atlético Madrid", "away": "Sevilla", "home_odd": round(random.uniform(1.60, 1.80), 2), "away_odd": round(random.uniform(4.50, 5.00), 2), "draw_odd": round(random.uniform(3.40, 3.80), 2)},
-        {"id": "mat_3", "home": "Real Betis", "away": "Valencia", "home_odd": round(random.uniform(2.00, 2.20), 2), "away_odd": round(random.uniform(3.20, 3.60), 2), "draw_odd": round(random.uniform(3.10, 3.30), 2)},
-    ]
-    
-    payload = {
-        "type": "odds_update",
-        "matches": matches,
-        "timestamp": asyncio.get_event_loop().time()
-    }
-    
+async def emit_real_odds():
+    """Obtiene cuotas reales desde OddsClient (caché en disco) y las emite vía WebSocket."""
+    try:
+        loop = asyncio.get_event_loop()
+        matches_raw = await loop.run_in_executor(None, _odds_client.get_upcoming_odds)
+
+        matches = []
+        for m in matches_raw:
+            avg_odds = m.get("avg_odds") or {}
+            home_odd = avg_odds.get("home")
+            away_odd = avg_odds.get("away")
+            # Skip matches without the minimum usable odds
+            if home_odd is None or away_odd is None:
+                continue
+            matches.append({
+                "id": m.get("id"),
+                "home": m.get("home_team"),
+                "away": m.get("away_team"),
+                "home_odd": home_odd,
+                "away_odd": away_odd,
+                "draw_odd": avg_odds.get("draw"),  # May be None; frontend handles null
+            })
+
+        payload = {
+            "type": "odds_update",
+            "matches": matches,
+            "timestamp": asyncio.get_event_loop().time(),
+        }
+    except Exception as e:
+        logger.error(f"Error fetching real odds for WebSocket broadcast: {e}")
+        payload = {
+            "type": "odds_update",
+            "matches": [],
+            "timestamp": asyncio.get_event_loop().time(),
+        }
+
     await manager.broadcast(payload)
 
 async def odds_generator_task():
-    """Ciclo infinito que genera actualizaciones de cuotas."""
+    """Ciclo infinito que emite actualizaciones de cuotas reales."""
     while True:
-        await asyncio.sleep(5)  # Actualizar cada 5 segundos
+        await asyncio.sleep(60)  # Cuotas en caché ~30min; 60s es suficiente
         if manager.active_connections:
-            await emit_mock_odds()
+            await emit_real_odds()

@@ -15,11 +15,8 @@ import { ApiService } from '../../services/api.service';
   template: `
     <div class="status">
       <div class="block">READY · F1 Dashboard · F2 Analysis · F3 History · F4 Live · F5 Settings · ESC menu</div>
-      <!-- HANDOFF-DEVIATION: SQLite size / uptime / req-rate son mock; el backend
-           no expone métricas de infraestructura. API OK refleja si /stats respondió. -->
       <div class="block center">
         The Odds API <span [class.ok]="apiUp()" [class.off]="!apiUp()">{{ apiUp() ? 'OK' : 'DOWN' }}</span>
-        · SQLite 14MB · uptime 7d 12h · 0,68 req/s
       </div>
       <div class="block">WS-001 · BANKROLL {{ bankrollStr() }}</div>
     </div>

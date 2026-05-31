@@ -6,7 +6,6 @@ import {
   SelectionStats, ValueBet,
 } from '../../core/services/api.service';
 import { WebsocketService, LiveOddMatch } from '../../core/services/websocket.service';
-import { MARKET_WATCH_SEED, BOT_COMMANDS } from './dashboard.mock';
 import {
   KpiVM, ChartPoint, ChartStats, PickVM, ScannerPickVM, StreakVM,
   RoiSportVM, RoiMarketVM, MarketRow, BotCommandVM, Sport,
@@ -44,8 +43,8 @@ export class DashboardStore {
   readonly scannerLoading = signal(false);
   readonly scannerError = signal(false);
 
-  readonly marketWatch = signal<MarketRow[]>(MARKET_WATCH_SEED);
-  readonly botCommands: BotCommandVM[] = BOT_COMMANDS;
+  readonly marketWatch = signal<MarketRow[]>([]);
+  readonly botCommands: BotCommandVM[] = [];
 
   readonly engineActive = this.ws.connected;
 
@@ -153,7 +152,7 @@ export class DashboardStore {
     });
   }
 
-  /** Suscribe al WS de cuotas y sobreescribe los precios reales sobre el seed. */
+  /** Suscribe al WS de cuotas. Los matches reales se insertan o actualizan en Market Watch. */
   subscribeLiveOdds(): void {
     this.ws.connect();
     this.wsSub = this.ws.odds$.subscribe(update => this.applyWsOdds(update.matches ?? []));
@@ -188,22 +187,48 @@ export class DashboardStore {
   }
 
   /**
-   * HANDOFF-DEVIATION: el WS sólo trae home/away/draw. Sobreescribimos las
-   * cuotas 1/X/2 reales sobre las filas del seed que casen por nombre de equipo,
-   * conservando edge/sparkline del mock (el modelo no viaja por el WS aún).
+   * Upsert real de cuotas desde el WS. marketWatch arranca vacío (sin mock).
+   * Para cada match del WS: si ya existe una fila (por nombre de equipo) se
+   * actualizan las cuotas 1/X/2 conservando prev; si NO existe se crea una fila
+   * nueva con los datos reales del WS. Los campos del modelo que el WS no
+   * transporta (edgeSide, edgeEV, spark) quedan a null — sin datos inventados.
    */
   private applyWsOdds(matches: LiveOddMatch[]): void {
     if (!matches.length) return;
     const rows = this.marketWatch().map(r => ({ ...r }));
     let touched = false;
     for (const m of matches) {
-      const row = rows.find(r => rowMatchesTeams(r, m.home, m.away));
-      if (!row) continue;
+      const existing = rows.find(r => rowMatchesTeams(r, m.home, m.away));
+      if (existing) {
+        // Patch: actualizar cuotas preservando previas para mostrar movimiento.
+        existing.prevH = existing.h;
+        existing.prevD = existing.d;
+        existing.prevA = existing.a;
+        existing.h = m.home_odd;
+        existing.d = m.draw_odd && m.draw_odd > 0 ? m.draw_odd : null;
+        existing.a = m.away_odd;
+      } else {
+        // Insert: crear fila nueva con datos reales; campos sin fuente real → null.
+        const drawOdd = m.draw_odd && m.draw_odd > 0 ? m.draw_odd : null;
+        const newRow: MarketRow = {
+          id: m.id,
+          time: '—',
+          live: false,
+          sport: 'NBA',
+          match: `${m.home} — ${m.away}`,
+          h: m.home_odd,
+          d: drawOdd,
+          a: m.away_odd,
+          prevH: m.home_odd,
+          prevD: drawOdd,
+          prevA: m.away_odd,
+          edgeSide: null,
+          edgeEV: null,
+          spark: null,
+        };
+        rows.push(newRow);
+      }
       touched = true;
-      row.prevH = row.h; row.prevD = row.d; row.prevA = row.a;
-      row.h = m.home_odd;
-      row.d = m.draw_odd && m.draw_odd > 0 ? m.draw_odd : null;
-      row.a = m.away_odd;
     }
     if (touched) this.marketWatch.set(rows);
   }

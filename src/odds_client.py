@@ -67,18 +67,16 @@ class OddsClient:
         self.matchday_span = sport_config.matchday_span_days if sport_config else 4
 
         if not self.api_key or self.api_key == "tu_clave_aqui":
-            logger.warning("⚠️  ODDS_API_KEY no configurada. Usando datos simulados.")
-            self._mock_mode = True
-        else:
-            self._mock_mode = False
+            logger.warning("⚠️  ODDS_API_KEY no configurada. No se obtendrán cuotas reales.")
 
     def get_upcoming_odds(self) -> list[dict]:
         """
         Obtiene cuotas para los próximos partidos del deporte configurado.
         Retorna lista de partidos con cuotas promedio por resultado.
         """
-        if self._mock_mode:
-            return self._get_mock_odds()
+        if not self.api_key or self.api_key == "tu_clave_aqui":
+            logger.error("❌ ODDS_API_KEY no configurada — no se obtienen cuotas reales")
+            return []
 
         # Intentar caché primero
         cache_key = f"odds_{self.sport_key}"
@@ -541,107 +539,3 @@ class OddsClient:
         trimmed = sorted_vals[1:-1]  # Quita extremos
         return round(sum(trimmed) / len(trimmed), 2)
 
-    def _get_mock_odds(self) -> list[dict]:
-        """Datos simulados para desarrollo sin API key."""
-        if self.sport_config and self.sport_config.sport_type == "basketball":
-            return self._get_mock_odds_nba()
-        return self._get_mock_odds_football()
-
-    def _get_mock_odds_nba(self) -> list[dict]:
-        """Datos simulados NBA para desarrollo — cuotas calibradas a los mock standings."""
-        logger.info("Usando cuotas NBA simuladas (modo desarrollo)")
-
-        def _nba_odds(home, away, o, u, spread_h, spread_a, spread_line, total_line):
-            return {
-                "home": home, "away": away, "draw": None,
-                "spread_home": spread_h, "spread_away": spread_a,
-                "spread_line": spread_line,
-                "over": o, "under": u,
-                "total_line": total_line,
-            }
-
-        # Cuotas calibradas: el spread del mercado refleja la diferencia real
-        # entre equipos en los standings mock para generar EVs de 3-12%
-        return [
-            # BOS (50-20) vs NYK (47-23) — BOS ligero favorito en casa
-            {"id": "nba_mock_1", "home_team": "Boston Celtics", "away_team": "New York Knicks",
-             "commence_time": "2026-04-09T00:00:00Z", "bookmakers_count": 8,
-             "avg_odds": _nba_odds(1.62, 2.35, 1.91, 1.91, 1.91, 1.91, -4.0, 221.5)},
-            # CLE (52-18) vs MIL (44-26) — CLE favorito moderado
-            {"id": "nba_mock_2", "home_team": "Cleveland Cavaliers", "away_team": "Milwaukee Bucks",
-             "commence_time": "2026-04-09T00:30:00Z", "bookmakers_count": 8,
-             "avg_odds": _nba_odds(1.50, 2.60, 1.88, 1.94, 1.91, 1.91, -6.0, 220.5)},
-            # OKC (54-16) vs DEN (48-22) — OKC favorito claro
-            {"id": "nba_mock_3", "home_team": "Oklahoma City Thunder", "away_team": "Denver Nuggets",
-             "commence_time": "2026-04-09T01:00:00Z", "bookmakers_count": 8,
-             "avg_odds": _nba_odds(1.42, 2.85, 1.90, 1.92, 1.91, 1.91, -7.5, 218.5)},
-            # LAL (42-28) vs PHX (43-27) — partido parejo
-            {"id": "nba_mock_4", "home_team": "Los Angeles Lakers", "away_team": "Phoenix Suns",
-             "commence_time": "2026-04-09T02:30:00Z", "bookmakers_count": 8,
-             "avg_odds": _nba_odds(1.87, 1.95, 1.92, 1.90, 1.91, 1.91, -1.5, 225.5)},
-            # GSW (38-32) vs DAL (44-26) — DAL ligero favorito fuera
-            {"id": "nba_mock_5", "home_team": "Golden State Warriors", "away_team": "Dallas Mavericks",
-             "commence_time": "2026-04-10T02:00:00Z", "bookmakers_count": 8,
-             "avg_odds": _nba_odds(2.15, 1.72, 1.89, 1.93, 1.91, 1.91, 2.5, 225.0)},
-            # MIA (39-31) vs IND (43-27) — IND ligero favorito fuera
-            {"id": "nba_mock_6", "home_team": "Miami Heat", "away_team": "Indiana Pacers",
-             "commence_time": "2026-04-10T00:00:00Z", "bookmakers_count": 8,
-             "avg_odds": _nba_odds(2.05, 1.80, 1.91, 1.91, 1.91, 1.91, 1.0, 228.5)},
-        ]
-
-    def _get_mock_odds_football(self) -> list[dict]:
-        """Datos simulados La Liga para desarrollo sin API key — Jornada 31."""
-        logger.info("Usando cuotas simuladas (modo desarrollo) — J31")
-
-        def _full_odds(home, draw, away, o25, u25, btts_y=None, btts_n=None):
-            """Genera dict de odds completo con mercados derivados."""
-            btts_y = btts_y or round(1 / (0.55 if o25 < 2.0 else 0.45), 2)
-            btts_n = btts_n or round(1 / (1 - 1/btts_y), 2)
-            dc_1x = round(1 / (1/home + 1/draw) * 0.92, 2)
-            dc_x2 = round(1 / (1/away + 1/draw) * 0.92, 2)
-            dc_12 = round(1 / (1/home + 1/away) * 0.92, 2)
-            o15 = round(max(1.05, o25 * 0.62), 2)
-            u15 = round(1 / (1 - 1/o15), 2)
-            o35 = round(o25 * 1.65, 2)
-            u35 = round(1 / (1 - 1/o35), 2)
-            return {
-                "home": home, "draw": draw, "away": away,
-                "double_chance_1x": dc_1x, "double_chance_x2": dc_x2, "double_chance_12": dc_12,
-                "over_15": o15, "under_15": u15,
-                "over_25": o25, "under_25": u25,
-                "over_35": o35, "under_35": u35,
-                "btts_yes": btts_y, "btts_no": btts_n,
-            }
-
-        return [
-            {"id": "mock_1", "home_team": "Rayo Vallecano", "away_team": "Elche",
-             "commence_time": "2026-04-10T19:00:00Z", "bookmakers_count": 5,
-             "avg_odds": _full_odds(1.85, 3.40, 4.20, 2.10, 1.75)},
-            {"id": "mock_2", "home_team": "Real Sociedad", "away_team": "Levante",
-             "commence_time": "2026-04-11T14:00:00Z", "bookmakers_count": 5,
-             "avg_odds": _full_odds(1.68, 3.60, 5.00, 1.95, 1.85)},
-            {"id": "mock_3", "home_team": "Mallorca", "away_team": "Real Madrid",
-             "commence_time": "2026-04-11T16:15:00Z", "bookmakers_count": 5,
-             "avg_odds": _full_odds(5.50, 3.80, 1.67, 1.80, 2.00)},
-            {"id": "mock_4", "home_team": "Real Betis", "away_team": "Espanyol",
-             "commence_time": "2026-04-11T18:30:00Z", "bookmakers_count": 5,
-             "avg_odds": _full_odds(1.75, 3.50, 4.50, 1.90, 1.90)},
-            {"id": "mock_5", "home_team": "Atlético Madrid", "away_team": "Barcelona",
-             "commence_time": "2026-04-11T21:00:00Z", "bookmakers_count": 5,
-             "avg_odds": _full_odds(3.15, 3.30, 2.10, 1.85, 1.95)},
-            {"id": "mock_6", "home_team": "Getafe", "away_team": "Athletic Club",
-             "commence_time": "2026-04-12T14:00:00Z", "bookmakers_count": 5,
-             "avg_odds": _full_odds(3.05, 3.10, 2.90, 2.30, 1.60)},
-            {"id": "mock_7", "home_team": "Valencia", "away_team": "Celta Vigo",
-             "commence_time": "2026-04-12T16:15:00Z", "bookmakers_count": 5,
-             "avg_odds": _full_odds(2.38, 3.30, 2.75, 1.80, 2.00)},
-            {"id": "mock_8", "home_team": "Real Oviedo", "away_team": "Sevilla",
-             "commence_time": "2026-04-12T18:30:00Z", "bookmakers_count": 5,
-             "avg_odds": _full_odds(2.75, 3.20, 2.60, 1.85, 1.95)},
-            {"id": "mock_9", "home_team": "Deportivo Alavés", "away_team": "Osasuna",
-             "commence_time": "2026-04-12T21:00:00Z", "bookmakers_count": 5,
-             "avg_odds": _full_odds(2.42, 3.30, 3.25, 2.05, 1.78)},
-            {"id": "mock_10", "home_team": "Girona", "away_team": "Villarreal",
-             "commence_time": "2026-04-13T21:00:00Z", "bookmakers_count": 5,
-             "avg_odds": _full_odds(2.87, 3.30, 2.37, 1.75, 2.10)},
-        ]

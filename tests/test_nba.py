@@ -1,6 +1,9 @@
 """Tests para NBAClient, EVCalculator NBA y Analyzer NBA routing."""
 
 import pytest
+from unittest.mock import patch, MagicMock
+import pandas as pd
+
 from src.nba_client import NBAClient
 from src.ev_calculator import EVCalculator, EVResult
 from src.normal_model import NBAMatchProbabilities
@@ -9,74 +12,133 @@ from src.sports.config import NBA, LALIGA
 
 
 # ══════════════════════════════════════════════════════════════
-# NBAClient
+# NBAClient — standings tests use patched nba_api (no network)
 # ══════════════════════════════════════════════════════════════
+
+# Canned data: a minimal real-shaped DataFrame that LeagueStandings returns.
+# Two teams, enough to verify all parsing/find_team logic.
+_CANNED_ROWS = [
+    {
+        "TeamID": 1610612738, "TeamCity": "Boston", "TeamName": "Celtics",
+        "PlayoffRank": 1, "WINS": 50, "LOSSES": 20,
+        "PointsPG": 117.0, "OppPointsPG": 108.0, "DiffPointsPG": 9.0,
+        "WinPCT": 0.714, "L10": "WWWLWWWLWW", "Conference": "East",
+    },
+    {
+        "TeamID": 1610612747, "TeamCity": "Los Angeles", "TeamName": "Lakers",
+        "PlayoffRank": 5, "WINS": 42, "LOSSES": 28,
+        "PointsPG": 113.0, "OppPointsPG": 109.0, "DiffPointsPG": 4.0,
+        "WinPCT": 0.600, "L10": "WLWWLWLWWL", "Conference": "West",
+    },
+    {
+        "TeamID": 1610612760, "TeamCity": "Oklahoma City", "TeamName": "Thunder",
+        "PlayoffRank": 1, "WINS": 54, "LOSSES": 16,
+        "PointsPG": 118.0, "OppPointsPG": 105.0, "DiffPointsPG": 13.0,
+        "WinPCT": 0.771, "L10": "WWWWWWWWWL", "Conference": "West",
+    },
+]
+
+
+def _make_mock_standings_api():
+    """Returns a mock LeagueStandings instance whose get_data_frames()[0] is the canned DataFrame."""
+    mock_api = MagicMock()
+    mock_api.get_data_frames.return_value = [pd.DataFrame(_CANNED_ROWS)]
+    return mock_api
+
 
 @pytest.fixture
 def nba_client():
-    client = NBAClient()
-    client._mock_mode = True
-    return client
+    return NBAClient()
 
 
-def test_nba_mock_standings_30_teams(nba_client):
-    """Mock standings deben tener 30 equipos NBA."""
-    standings = nba_client.get_standings()
-    assert len(standings) == 30
+@pytest.fixture
+def canned_standings(nba_client):
+    """
+    Calls get_standings() with nba_api patched to return canned data.
+    Also patches get_team_pace_map so no second network call is made.
+    """
+    with patch("nba_api.stats.endpoints.leaguestandings.LeagueStandings",
+               return_value=_make_mock_standings_api()), \
+         patch.object(nba_client, "get_team_pace_map", return_value={}), \
+         patch.object(nba_client.cache, "get", return_value=None), \
+         patch.object(nba_client.cache, "set"):
+        standings = nba_client.get_standings()
+    return standings, nba_client
 
 
-def test_nba_standings_fields(nba_client):
-    """Cada equipo debe tener los campos requeridos."""
-    standings = nba_client.get_standings()
+def test_nba_standings_fields(canned_standings):
+    """Cada equipo parseado debe tener los campos requeridos."""
+    standings, _ = canned_standings
     required = ["team_id", "team_name", "played", "wins", "losses",
                  "points_for", "points_against", "win_pct", "conference"]
+    assert len(standings) == 3
     for team in standings:
         for field in required:
             assert field in team, f"Missing field '{field}' in {team['team_name']}"
 
 
-def test_nba_standings_win_pct(nba_client):
-    """win_pct debe ser wins/played."""
-    standings = nba_client.get_standings()
+def test_nba_standings_win_pct(canned_standings):
+    """win_pct del registro parseado debe coincidir con el valor de la API."""
+    standings, _ = canned_standings
     for team in standings:
-        expected = round(team["wins"] / team["played"], 3)
-        assert team["win_pct"] == expected
+        # The parser stores WinPCT directly from the row (float cast)
+        assert isinstance(team["win_pct"], float)
+        assert 0.0 <= team["win_pct"] <= 1.0
 
 
-def test_nba_find_team_exact(nba_client):
+def test_nba_standings_played_computed(canned_standings):
+    """played = wins + losses debe calcularse correctamente."""
+    standings, _ = canned_standings
+    for team in standings:
+        assert team["played"] == team["wins"] + team["losses"]
+
+
+def test_nba_find_team_exact(canned_standings):
     """Buscar equipo por nombre exacto."""
-    standings = nba_client.get_standings()
-    found = nba_client.find_team_in_standings("Boston Celtics", standings)
+    standings, client = canned_standings
+    found = client.find_team_in_standings("Boston Celtics", standings)
     assert found is not None
     assert "Celtics" in found["team_name"]
 
 
-def test_nba_find_team_partial(nba_client):
-    """Buscar equipo por nombre parcial."""
-    standings = nba_client.get_standings()
-    found = nba_client.find_team_in_standings("Lakers", standings)
+def test_nba_find_team_partial(canned_standings):
+    """Buscar equipo por nombre parcial (nickname)."""
+    standings, client = canned_standings
+    found = client.find_team_in_standings("Lakers", standings)
     assert found is not None
     assert "Lakers" in found["team_name"]
 
 
-def test_nba_find_team_alias(nba_client):
-    """Buscar equipo por alias comun."""
-    standings = nba_client.get_standings()
-    found = nba_client.find_team_in_standings("OKC Thunder", standings)
+def test_nba_find_team_alias(canned_standings):
+    """Buscar equipo por alias comun (OKC Thunder)."""
+    standings, client = canned_standings
+    found = client.find_team_in_standings("OKC Thunder", standings)
     assert found is not None
     assert "Thunder" in found["team_name"]
 
 
-def test_nba_find_team_not_found(nba_client):
+def test_nba_find_team_not_found(canned_standings):
     """Equipo inexistente retorna None."""
-    standings = nba_client.get_standings()
-    found = nba_client.find_team_in_standings("FC Barcelona", standings)
+    standings, client = canned_standings
+    found = client.find_team_in_standings("FC Barcelona", standings)
     assert found is None
 
 
-def test_nba_h2h_mock_returns_empty(nba_client):
-    """En mock mode, H2H retorna lista vacia."""
-    result = nba_client.get_h2h(1, 2)
+def test_nba_standings_fail_returns_empty(nba_client):
+    """Si la API falla, get_standings retorna [] (no mock data, no crash)."""
+    with patch("nba_api.stats.endpoints.leaguestandings.LeagueStandings",
+               side_effect=Exception("network error")), \
+         patch.object(nba_client.cache, "get", return_value=None):
+        result = nba_client.get_standings()
+    assert result == []
+
+
+def test_nba_h2h_returns_empty_on_api_failure(nba_client):
+    """get_h2h retorna [] cuando la API falla (fail-loud path devuelve lista vacía)."""
+    with patch("nba_api.stats.endpoints.teamgamelog.TeamGameLog",
+               side_effect=Exception("network error")), \
+         patch.object(nba_client.cache, "get", return_value=None):
+        result = nba_client.get_h2h(1610612738, 1610612747)
     assert result == []
 
 

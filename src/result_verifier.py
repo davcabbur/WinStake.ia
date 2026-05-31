@@ -90,9 +90,6 @@ class ResultVerifier:
 
     def _fetch_recent_results(self, days: int = 7) -> list[dict]:
         """Obtiene resultados de partidos recientes desde API-Football."""
-        if self.football_client._mock_mode:
-            return self._get_mock_results()
-
         import config
         from_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
         to_date = datetime.now().strftime("%Y-%m-%d")
@@ -143,23 +140,6 @@ class ResultVerifier:
                 return result
 
         return None
-
-    def _get_mock_results(self) -> list[dict]:
-        """Resultados simulados para desarrollo."""
-        logger.info("Usando resultados simulados (modo mock)")
-        return [
-            {"home_team": "Rayo Vallecano", "away_team": "Elche",
-             "home_goals": 2, "away_goals": 1, "date": "2026-04-03"},
-            {"home_team": "Real Sociedad", "away_team": "Levante",
-             "home_goals": 1, "away_goals": 0, "date": "2026-04-04"},
-            {"home_team": "Mallorca", "away_team": "Real Madrid",
-             "home_goals": 0, "away_goals": 3, "date": "2026-04-04"},
-            {"home_team": "Real Betis", "away_team": "Espanyol",
-             "home_goals": 2, "away_goals": 0, "date": "2026-04-04"},
-            {"home_team": "Atlético Madrid", "away_team": "Barcelona",
-             "home_goals": 1, "away_goals": 2, "date": "2026-04-04"},
-        ]
-
 
 def verify_results():
     """Entry point para verificación desde CLI o scheduler."""
