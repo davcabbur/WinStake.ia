@@ -15,6 +15,7 @@ BASKETBALL_API_KEY = os.getenv("BASKETBALL_API_KEY", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 DASHBOARD_API_KEY = os.getenv("DASHBOARD_API_KEY", "")
+WORLD_CUP_API_KEY = os.getenv("WORLD_CUP_API_KEY", "")
 
 # ── The Odds API ──────────────────────────────────────────
 ODDS_API_BASE = "https://api.the-odds-api.com/v4"
@@ -28,6 +29,10 @@ FOOTBALL_API_BASE = "https://v3.football.api-sports.io"
 FOOTBALL_API_HOST = "v3.football.api-sports.io"
 LA_LIGA_ID = 140              # ID de La Liga en API-Football
 CURRENT_SEASON = 2025         # Temporada 2025-26
+
+# ── World Cup API (worldcupapi.com) ───────────────────────
+WORLD_CUP_API_BASE = "https://api.worldcupapi.com"
+WORLD_CUP_LANG = os.getenv("WINSTAKE_WC_LANG", "es")  # la API acepta &lang=
 
 # ── Parámetros del modelo ─────────────────────────────────
 HOME_ADVANTAGE = 0.18         # Bonus λ para equipo local (La Liga post-COVID: ~0.15-0.20)
@@ -50,6 +55,13 @@ CACHE_TTL_ODDS = 30 * 60          # 30 minutos — cuotas cambian frecuentemente
 CACHE_TTL_STANDINGS = 2 * 60 * 60 # 2 horas — clasificación cambia poco
 CACHE_TTL_TEAM_STATS = 4 * 60 * 60 # 4 horas — stats detalladas
 CACHE_TTL_H2H = 24 * 60 * 60     # 24 horas — historial no cambia
+
+# World Cup API — TTLs calibrados para no quemar las 1500 requests del free trial
+CACHE_TTL_WC_LIVE      = 60          # livescores / livestandings (en vivo)
+CACHE_TTL_WC_FIXTURES  = 6 * 60 * 60 # fixtures (calendario, cambia poco)
+CACHE_TTL_WC_STANDINGS = 30 * 60     # standings
+CACHE_TTL_WC_MATCH     = 5 * 60      # events / statistics / lineups / commentary
+CACHE_TTL_WC_STATIC    = 24 * 60 * 60 # squads / history / head2head / goalscorers / cards
 
 # ── Paper trading ─────────────────────────────────────────
 # Cuando =1, el motor de análisis usa la cuota cruda del bookmaker elegido
