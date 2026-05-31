@@ -187,3 +187,67 @@ class WorldCupClient:
             "cards", {}, config.CACHE_TTL_WC_STATIC,
             f"wc_cards_{self.lang}",
         )
+
+
+# ── Parsers de normalización ─────────────────────────────────────────────────
+# Funciones puras que normalizan el JSON crudo de worldcupapi.com a dicts con
+# nombres limpios y estables, listos para el motor de picks. Shapes verificados
+# contra respuestas reales el 2026-05-31 (ver fixtures en tests).
+
+
+def parse_fixture(raw: dict) -> dict:
+    """Normaliza un partido de /fixtures.
+
+    El endpoint ya incluye cuotas pre-partido 1/X/2 en `odds.pre`, que se
+    exponen como `odds_1x2` {home, draw, away} (None si no hay cuotas todavía).
+    """
+    raw = raw or {}
+    home = raw.get("home") or {}
+    away = raw.get("away") or {}
+    pre = (raw.get("odds") or {}).get("pre") or {}
+    return {
+        "id": raw.get("id"),
+        "round": raw.get("round"),
+        "date": raw.get("date"),
+        "time": raw.get("time"),
+        "home_team": home.get("name"),
+        "home_id": home.get("id"),
+        "away_team": away.get("name"),
+        "away_id": away.get("id"),
+        "group_id": raw.get("group_id"),
+        "location": raw.get("location"),
+        "odds_1x2": {
+            "home": pre.get("1"),
+            "draw": pre.get("X"),
+            "away": pre.get("2"),
+        },
+    }
+
+
+def parse_fixtures(raw_list) -> list[dict]:
+    """Normaliza la lista de /fixtures. Acepta None/[] de forma defensiva."""
+    return [parse_fixture(r) for r in (raw_list or [])]
+
+
+def parse_standing(raw: dict) -> dict:
+    """Normaliza una fila de /standings (matches→played, goals_scored→goals_for...)."""
+    raw = raw or {}
+    team = raw.get("team") or {}
+    return {
+        "rank": raw.get("rank"),
+        "team_id": team.get("id"),
+        "team_name": team.get("name"),
+        "points": raw.get("points"),
+        "played": raw.get("matches"),
+        "won": raw.get("won"),
+        "drawn": raw.get("drawn"),
+        "lost": raw.get("lost"),
+        "goals_for": raw.get("goals_scored"),
+        "goals_against": raw.get("goals_conceded"),
+        "goal_diff": raw.get("goal_diff"),
+    }
+
+
+def parse_standings(raw_list) -> list[dict]:
+    """Normaliza la lista de /standings. Acepta None/[] de forma defensiva."""
+    return [parse_standing(r) for r in (raw_list or [])]
