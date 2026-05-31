@@ -32,11 +32,6 @@ def parse_args(args=None):
         description="WinStake.ia — Análisis cuantitativo de apuestas La Liga",
     )
     parser.add_argument(
-        "--mock-mode",
-        action="store_true",
-        help="Usar datos simulados sin llamar a las APIs reales",
-    )
-    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Ejecutar análisis sin enviar mensajes a Telegram ni guardar en BD",
@@ -156,8 +151,6 @@ def main(cli_args: list = None):
 
     if args.dry_run:
         logger.info("   ⚠️  Modo dry-run: sin Telegram ni BD")
-    if args.mock_mode:
-        logger.info("   🔧 Modo mock: datos simulados")
 
     # ── 1. Inicializar clientes ──────────────────────────
     odds_client = OddsClient(sport_config=sport)
@@ -171,10 +164,6 @@ def main(cli_args: list = None):
     else:
         stats_client = FootballClient()
         formatter = Formatter()
-
-    if args.mock_mode:
-        odds_client._mock_mode = True
-        stats_client._mock_mode = True
 
     # ── 2. Obtener cuotas ────────────────────────────────
     logger.info("📊 Obteniendo cuotas de mercado...")

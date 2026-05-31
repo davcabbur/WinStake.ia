@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, OnDestroy, OnInit, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, OnInit, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 
 type Period = '7D' | '30D' | '3M' | 'YTD' | 'TODO';
@@ -23,7 +23,7 @@ type Period = '7D' | '30D' | '3M' | 'YTD' | 'TODO';
           <span class="h1">Resumen del Sistema</span>
           <span class="meta">
             Última actualización <span class="v">{{ lastUpdate }}</span>
-            · Próximo ciclo en <span class="amber">{{ countdown() }}</span>
+            · Próximo ciclo en <span class="amber">—</span>
           </span>
         </div>
       </div>
@@ -61,34 +61,15 @@ type Period = '7D' | '30D' | '3M' | 'YTD' | 'TODO';
     .pbtn.active:hover { color: #0a0d12; }
   `]
 })
-export class PageTitleComponent implements OnInit, OnDestroy {
+export class PageTitleComponent implements OnInit {
   readonly periods: Period[] = ['7D', '30D', '3M', 'YTD', 'TODO'];
   readonly active = signal<Period>('TODO');
 
   lastUpdate = '';
-  readonly countdown = signal('00:00');
-
-  private remaining = 48; // segundos, mock
-  private timer: ReturnType<typeof setInterval> | null = null;
 
   ngOnInit() {
     const now = new Date();
     const p = (n: number) => String(n).padStart(2, '0');
     this.lastUpdate = `${p(now.getHours())}:${p(now.getMinutes())}:${p(now.getSeconds())}`;
-    this.renderCountdown();
-    this.timer = setInterval(() => {
-      this.remaining = this.remaining > 0 ? this.remaining - 1 : 59;
-      this.renderCountdown();
-    }, 1000);
-  }
-
-  ngOnDestroy() {
-    if (this.timer !== null) clearInterval(this.timer);
-  }
-
-  private renderCountdown() {
-    const m = Math.floor(this.remaining / 60);
-    const s = this.remaining % 60;
-    this.countdown.set(`${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`);
   }
 }

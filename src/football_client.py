@@ -43,10 +43,7 @@ class FootballClient:
         self.session = _create_session()
 
         if not self.api_key or self.api_key == "tu_clave_aqui":
-            logger.warning("⚠️  FOOTBALL_API_KEY no configurada. Usando datos simulados.")
-            self._mock_mode = True
-        else:
-            self._mock_mode = False
+            logger.warning("⚠️  FOOTBALL_API_KEY no configurada. Las llamadas a la API fallarán.")
 
     def _request(self, endpoint: str, params: dict) -> Optional[dict]:
         """Realiza una petición a la API."""
@@ -72,8 +69,9 @@ class FootballClient:
 
     def get_standings(self) -> list[dict]:
         """Obtiene la clasificación actual de La Liga."""
-        if self._mock_mode:
-            return self._get_mock_standings()
+        if not self.api_key or self.api_key == "tu_clave_aqui":
+            logger.error("❌ FOOTBALL_API_KEY no configurada — get_standings no puede ejecutarse")
+            return []
 
         # Intentar caché primero
         cache_key = f"standings_{config.LA_LIGA_ID}_{config.CURRENT_SEASON}"
@@ -87,7 +85,8 @@ class FootballClient:
             "season": config.CURRENT_SEASON,
         })
         if not data:
-            return self._get_mock_standings()
+            logger.error("❌ get_standings: API no devolvió datos — retornando []")
+            return []
 
         try:
             standings_raw = data["response"][0]["league"]["standings"][0]
@@ -131,11 +130,12 @@ class FootballClient:
 
         except (KeyError, IndexError) as e:
             logger.error(f"❌ Error parseando standings: {e}")
-            return self._get_mock_standings()
+            return []
 
     def get_team_stats(self, team_id: int) -> Optional[dict]:
         """Obtiene estadísticas detalladas de un equipo."""
-        if self._mock_mode:
+        if not self.api_key or self.api_key == "tu_clave_aqui":
+            logger.error("❌ FOOTBALL_API_KEY no configurada — get_team_stats no puede ejecutarse")
             return None
 
         # Intentar caché
@@ -177,7 +177,8 @@ class FootballClient:
 
     def get_h2h(self, team1_id: int, team2_id: int, last: int = 5) -> list[dict]:
         """Obtiene historial directo entre dos equipos."""
-        if self._mock_mode:
+        if not self.api_key or self.api_key == "tu_clave_aqui":
+            logger.error("❌ FOOTBALL_API_KEY no configurada — get_h2h no puede ejecutarse")
             return []
 
         # Intentar caché
@@ -214,8 +215,9 @@ class FootballClient:
 
     def get_top_scorers(self, limit: int = 40) -> list[dict]:
         """Obtiene goleadores y asistentes de La Liga para estimar probabilidad de anotar."""
-        if self._mock_mode:
-            return self._get_mock_scorers()
+        if not self.api_key or self.api_key == "tu_clave_aqui":
+            logger.error("❌ FOOTBALL_API_KEY no configurada — get_top_scorers no puede ejecutarse")
+            return []
 
         cache_key = f"top_scorers_{config.LA_LIGA_ID}_{config.CURRENT_SEASON}"
         cached = self.cache.get(cache_key, config.CACHE_TTL_H2H)
@@ -228,7 +230,8 @@ class FootballClient:
             "season": config.CURRENT_SEASON,
         })
         if not data:
-            return self._get_mock_scorers()
+            logger.error("❌ get_top_scorers: API no devolvió datos — retornando []")
+            return []
 
         try:
             result = []
@@ -264,43 +267,7 @@ class FootballClient:
 
         except (KeyError, TypeError, IndexError) as e:
             logger.error(f"❌ Error parseando top scorers: {e}")
-            return self._get_mock_scorers()
-
-    def _get_mock_scorers(self) -> list[dict]:
-        """Goleadores simulados basados en datos reales J30 2025-26."""
-        logger.info("🔧 Usando goleadores simulados")
-        players = [
-            ("Robert Lewandowski", 1001, "Barcelona", 1001, 25, 5, 28, 2340),
-            ("Kylian Mbappé", 1002, "Real Madrid", 1002, 20, 6, 29, 2520),
-            ("Raphinha", 1003, "Barcelona", 1001, 16, 10, 28, 2380),
-            ("Alexander Sörloth", 1004, "Atlético Madrid", 1004, 14, 3, 27, 2160),
-            ("Ayoze Pérez", 1005, "Villarreal", 1003, 13, 5, 28, 2300),
-            ("Antoine Griezmann", 1006, "Atlético Madrid", 1004, 11, 8, 28, 2200),
-            ("Iago Aspas", 1007, "Celta Vigo", 1006, 11, 5, 27, 2100),
-            ("Vinicius Jr", 1008, "Real Madrid", 1002, 10, 7, 25, 2050),
-            ("Iker Muniain", 1009, "Real Betis", 1005, 9, 4, 26, 2000),
-            ("Gorka Guruzeta", 1010, "Athletic Club", 1009, 9, 3, 27, 2150),
-            ("Ante Budimir", 1011, "Osasuna", 1010, 9, 2, 28, 2250),
-            ("Borja Iglesias", 1012, "Real Betis", 1005, 8, 4, 24, 1800),
-            ("Dani Olmo", 1013, "Barcelona", 1001, 8, 6, 22, 1700),
-            ("Samu Omorodion", 1014, "Atlético Madrid", 1004, 8, 2, 25, 1900),
-            ("Hugo Duro", 1015, "Valencia", 1012, 8, 3, 28, 2200),
-            ("Bryan Gil", 1016, "Girona", 1013, 7, 4, 26, 1950),
-            ("Chimy Ávila", 1017, "Osasuna", 1010, 7, 3, 24, 1800),
-            ("Óscar Trejo", 1018, "Rayo Vallecano", 1014, 6, 6, 27, 2100),
-            ("Javier Puado", 1019, "Espanyol", 1011, 7, 3, 28, 2300),
-            ("Álvaro García", 1020, "Rayo Vallecano", 1014, 6, 3, 26, 2000),
-        ]
-        return [
-            {
-                "player_name": name, "player_id": pid,
-                "team_name": team, "team_id": tid,
-                "goals": g, "assists": a, "appearances": apps, "minutes": mins,
-                "goals_per_90": round((g / mins) * 90, 3) if mins > 0 else 0,
-                "assists_per_90": round((a / mins) * 90, 3) if mins > 0 else 0,
-            }
-            for name, pid, team, tid, g, a, apps, mins in players
-        ]
+            return []
 
     def get_players_for_match(self, home_team: str, away_team: str, scorers: list[dict]) -> dict:
         """Filtra goleadores relevantes para un partido específico."""
@@ -331,7 +298,8 @@ class FootballClient:
         Obtiene los fixtures de La Liga programados para hoy.
         Usado para mapear partidos a fixture_id y luego pedir onces.
         """
-        if self._mock_mode:
+        if not self.api_key or self.api_key == "tu_clave_aqui":
+            logger.error("❌ FOOTBALL_API_KEY no configurada — get_today_fixtures no puede ejecutarse")
             return []
 
         from datetime import date
@@ -374,7 +342,8 @@ class FootballClient:
         Retorna None si todavía no están publicadas (pre-partido).
         La respuesta incluye startXI, suplentes, formación y entrenador.
         """
-        if self._mock_mode:
+        if not self.api_key or self.api_key == "tu_clave_aqui":
+            logger.error("❌ FOOTBALL_API_KEY no configurada — get_fixture_lineups no puede ejecutarse")
             return None
 
         # Cache corto (5 min) — los onces pueden llegar en cualquier momento
@@ -458,76 +427,3 @@ class FootballClient:
         logger.warning(f"⚠️  Equipo no encontrado en standings: {team_name}")
         return None
 
-    def _get_mock_standings(self) -> list[dict]:
-        """Datos simulados basados en la clasificación real J29."""
-        logger.info("🔧 Usando clasificación simulada (modo desarrollo)")
-        #                Name              pts  pld  w  d  l  gf gc  xgf   xga
-        teams = [
-            ("Barcelona",          77, 29, 24, 5, 0, 78, 28, 72.5, 31.2),
-            ("Real Madrid",        69, 29, 22, 3, 4, 63, 26, 58.0, 28.5),
-            ("Villarreal",         58, 29, 18, 4, 7, 54, 34, 50.8, 36.1),
-            ("Atlético Madrid",    57, 29, 17, 6, 6, 49, 28, 44.3, 30.4),
-            ("Real Betis",         44, 29, 11, 11, 7, 44, 37, 40.2, 38.9),
-            ("Celta Vigo",         41, 29, 10, 11, 8, 41, 35, 38.5, 36.7),
-            ("Real Sociedad",      38, 29, 10, 8, 11, 44, 45, 39.1, 41.3),
-            ("Getafe",             38, 29, 11, 5, 13, 25, 31, 22.8, 33.5),
-            ("Athletic Club",      38, 29, 11, 5, 13, 32, 41, 30.5, 38.2),
-            ("Osasuna",            37, 29, 10, 7, 12, 34, 35, 31.9, 36.8),
-            ("Espanyol",           37, 29, 10, 7, 12, 36, 44, 33.4, 42.1),
-            ("Valencia",           35, 29, 9, 8, 12, 32, 42, 30.1, 39.7),
-            ("Girona",             34, 29, 8, 10, 11, 31, 44, 35.2, 40.5),
-            ("Rayo Vallecano",     32, 29, 7, 11, 11, 28, 35, 26.3, 37.1),
-            ("Sevilla",            31, 29, 8, 7, 14, 37, 49, 34.8, 45.6),
-            ("Deportivo Alavés",   31, 29, 8, 7, 14, 30, 41, 28.1, 43.2),
-            ("Elche",              29, 29, 6, 11, 12, 38, 46, 34.5, 44.8),
-            ("Mallorca",           28, 29, 7, 7, 15, 34, 47, 29.7, 44.1),
-            ("Levante",            26, 29, 6, 8, 15, 34, 48, 31.2, 46.3),
-            ("Real Oviedo",        21, 29, 4, 9, 16, 20, 48, 19.5, 45.9),
-        ]
-
-        standings = []
-        for i, (name, pts, played, w, d, l, gf, gc, xgf, xga) in enumerate(teams, 1):
-            # Estimar splits local/visitante (aprox 60/40)
-            home_p = played // 2 + (1 if i % 2 == 0 else 0)
-            away_p = played - home_p
-            home_gf = int(gf * 0.6)
-            away_gf = gf - home_gf
-            home_gc = int(gc * 0.4)
-            away_gc = gc - home_gc
-
-            standings.append({
-                "team_id": 1000 + i,
-                "team_name": name,
-                "rank": i,
-                "points": pts,
-                "played": played,
-                "wins": w,
-                "draws": d,
-                "losses": l,
-                "goals_for": gf,
-                "goals_against": gc,
-                "goal_diff": gf - gc,
-                "form": "",
-                "xg_for": xgf,
-                "xg_against": xga,
-                "xg_for_per_match": round(xgf / played, 2),
-                "xg_against_per_match": round(xga / played, 2),
-                "home": {
-                    "played": home_p,
-                    "wins": int(w * 0.6),
-                    "draws": d // 2,
-                    "losses": home_p - int(w * 0.6) - d // 2,
-                    "goals_for": home_gf,
-                    "goals_against": home_gc,
-                },
-                "away": {
-                    "played": away_p,
-                    "wins": w - int(w * 0.6),
-                    "draws": d - d // 2,
-                    "losses": away_p - (w - int(w * 0.6)) - (d - d // 2),
-                    "goals_for": away_gf,
-                    "goals_against": away_gc,
-                },
-            })
-
-        return standings

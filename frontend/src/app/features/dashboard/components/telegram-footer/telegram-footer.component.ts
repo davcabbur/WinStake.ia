@@ -16,6 +16,7 @@ import { BotCommandVM } from '../../dashboard.models';
       <div class="kicker">TELEGRAM BOT · &#64;winstake_bot</div>
       <div class="cmds">
         <div *ngFor="let c of commands">→ {{ c.cmd }} <span class="dim">{{ c.time }} · {{ c.detail }}</span></div>
+        <div *ngIf="commands.length === 0" class="empty">Sin actividad reciente del bot</div>
       </div>
     </div>
   `,
@@ -24,6 +25,7 @@ import { BotCommandVM } from '../../dashboard.models';
     .kicker { font-family: var(--ws-font-mono); font-size: var(--ws-text-kicker); color: var(--ws-dim); letter-spacing: var(--ws-ls-kicker); margin-bottom: 6px; }
     .cmds { font-family: var(--ws-font-mono); font-size: var(--ws-text-meta); color: var(--ws-text); line-height: 1.7; }
     .dim { color: var(--ws-dim); }
+    .empty { color: var(--ws-dim2); font-style: italic; }
   `]
 })
 export class TelegramFooterComponent {

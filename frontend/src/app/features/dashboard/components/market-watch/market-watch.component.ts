@@ -50,7 +50,7 @@ const SPARK_H = 18;
         <div>
           <div class="kicker">MARKET WATCH · LIVE ODDS · NEXT 8H</div>
           <div class="title">Cotizaciones del mercado
-            <span class="meta">· {{ rows.length }} partidos · WS {{ wsConnected ? 'conectado' : 'mock' }}</span>
+            <span class="meta">· {{ rows.length }} partidos · WS {{ wsConnected ? 'conectado' : 'offline' }}</span>
           </div>
         </div>
         <div class="legend">
@@ -75,6 +75,9 @@ const SPARK_H = 18;
           </tr>
         </thead>
         <tbody>
+          <tr *ngIf="views.length === 0">
+            <td colspan="10" class="empty">Sin partidos con cuotas en este momento</td>
+          </tr>
           <tr *ngFor="let r of views">
             <td class="time">
               <span *ngIf="r.live" class="live"><span class="ldot"></span>{{ r.time }}</span>
@@ -168,6 +171,7 @@ const SPARK_H = 18;
     .aw { font-family: var(--ws-font-mono); font-size: var(--ws-text-kicker); }
     .aw.win { color: var(--ws-win); } .aw.loss { color: var(--ws-loss); } .aw.dim2 { color: var(--ws-dim2); }
 
+    .empty { text-align: center; padding: 24px 0; color: var(--ws-dim); font-family: var(--ws-font-mono); font-size: var(--ws-text-body); }
     .foot { margin-top: 10px; font-family: var(--ws-font-mono); font-size: var(--ws-text-kicker); color: var(--ws-dim2); display: flex; justify-content: space-between; border-top: 1px solid var(--ws-line); padding-top: 8px; }
   `]
 })

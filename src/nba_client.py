@@ -57,7 +57,6 @@ class NBAClient:
 
     def __init__(self, api_key: str = None):
         self.cache = APICache()
-        self._mock_mode = False
         self._pace_cache: dict[int, float] = {}  # team_id -> pace (in-memory within session)
 
     # ── Improvement 5: game window helper ────────────────────
@@ -140,9 +139,6 @@ class NBAClient:
 
     def get_standings(self) -> list[dict]:
         """Obtiene la clasificación actual de la NBA."""
-        if self._mock_mode:
-            return self._get_mock_standings()
-
         cache_key = f"nba_standings_{NBA_SEASON}"
         cached = self.cache.get(cache_key, config.CACHE_TTL_STANDINGS)
         if cached is not None:
@@ -190,15 +186,11 @@ class NBAClient:
             return result
 
         except Exception as e:
-            logger.error(f"Error obteniendo standings NBA: {e}")
-            logger.info("Usando standings simulados como fallback")
-            return self._get_mock_standings()
+            logger.error(f"❌ No se pudieron obtener standings NBA reales: {e}")
+            return []
 
     def get_h2h(self, team1_id: int, team2_id: int, last: int = 5) -> list[dict]:
         """Obtiene H2H entre dos equipos NBA (temporada actual)."""
-        if self._mock_mode:
-            return []
-
         cache_key = f"nba_h2h_{min(team1_id, team2_id)}_{max(team1_id, team2_id)}"
         cached = self.cache.get(cache_key, config.CACHE_TTL_H2H)
         if cached is not None:
@@ -672,64 +664,3 @@ class NBAClient:
         """No aplica para el modelo NBA actual."""
         return {"home": [], "away": []}
 
-    def _get_mock_standings(self) -> list[dict]:
-        """Datos simulados basados en standings NBA 2025-26 (~70 partidos jugados)."""
-        logger.info("Usando standings NBA simulados (modo desarrollo)")
-
-        teams = [
-            ("Cleveland Cavaliers", 52, 18, 8120, 7490, "East", 98.5),
-            ("Boston Celtics", 50, 20, 8190, 7560, "East", 100.2),
-            ("New York Knicks", 47, 23, 7910, 7420, "East", 97.8),
-            ("Milwaukee Bucks", 44, 26, 8050, 7700, "East", 101.5),
-            ("Indiana Pacers", 43, 27, 8330, 8050, "East", 103.2),
-            ("Orlando Magic", 42, 28, 7560, 7280, "East", 96.5),
-            ("Miami Heat", 39, 31, 7770, 7630, "East", 97.2),
-            ("Philadelphia 76ers", 37, 33, 7700, 7630, "East", 98.8),
-            ("Chicago Bulls", 34, 36, 7770, 7840, "East", 99.5),
-            ("Atlanta Hawks", 33, 37, 7910, 8050, "East", 101.0),
-            ("Brooklyn Nets", 30, 40, 7560, 7840, "East", 98.0),
-            ("Toronto Raptors", 28, 42, 7630, 7980, "East", 99.2),
-            ("Detroit Pistons", 26, 44, 7420, 7910, "East", 97.5),
-            ("Charlotte Hornets", 24, 46, 7490, 7980, "East", 100.5),
-            ("Washington Wizards", 18, 52, 7280, 8190, "East", 99.8),
-            ("Oklahoma City Thunder", 54, 16, 8260, 7350, "West", 99.0),
-            ("Denver Nuggets", 48, 22, 8120, 7560, "West", 98.2),
-            ("Minnesota Timberwolves", 46, 24, 7770, 7280, "West", 96.8),
-            ("Dallas Mavericks", 44, 26, 8050, 7700, "West", 100.5),
-            ("Phoenix Suns", 43, 27, 7980, 7630, "West", 99.5),
-            ("Los Angeles Lakers", 42, 28, 7910, 7630, "West", 99.0),
-            ("Sacramento Kings", 40, 30, 7980, 7840, "West", 101.8),
-            ("Houston Rockets", 39, 31, 7770, 7560, "West", 98.5),
-            ("Golden State Warriors", 38, 32, 7840, 7770, "West", 100.0),
-            ("Memphis Grizzlies", 36, 34, 7700, 7700, "West", 100.8),
-            ("Los Angeles Clippers", 34, 36, 7560, 7700, "West", 97.5),
-            ("New Orleans Pelicans", 31, 39, 7630, 7910, "West", 99.5),
-            ("San Antonio Spurs", 29, 41, 7630, 7980, "West", 100.2),
-            ("Portland Trail Blazers", 25, 45, 7420, 7980, "West", 98.8),
-            ("Utah Jazz", 22, 48, 7350, 8120, "West", 99.0),
-        ]
-
-        standings = []
-        for i, (name, w, l, pf, pa, conf, pace) in enumerate(teams, 1):
-            played = w + l
-            standings.append({
-                "team_id": 2000 + i,
-                "team_name": name,
-                "rank": i,
-                "played": played,
-                "wins": w,
-                "losses": l,
-                "points_for": pf,
-                "points_against": pa,
-                "point_diff": pf - pa,
-                "win_pct": round(w / played, 3) if played > 0 else 0,
-                "streak": 0,
-                "form": "",
-                "conference": conf,
-                "pace": pace,
-                "std_dev_factor": 1.0,
-                "ppg": round(pf / played, 1) if played > 0 else 0,
-                "opp_ppg": round(pa / played, 1) if played > 0 else 0,
-            })
-
-        return standings
