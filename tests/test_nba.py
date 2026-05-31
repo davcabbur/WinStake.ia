@@ -133,6 +133,32 @@ def test_nba_standings_fail_returns_empty(nba_client):
     assert result == []
 
 
+def test_nba_pace_map_uses_per_mode_detailed(nba_client):
+    """get_team_pace_map debe llamar a LeagueDashTeamStats con el kwarg
+    `per_mode_detailed` (la versión instalada de nba_api NO acepta
+    `per_mode_simple`) y parsear PACE por equipo."""
+    mock_api = MagicMock()
+    mock_api.get_data_frames.return_value = [pd.DataFrame([
+        {"TEAM_ID": 1610612738, "PACE": 99.5},
+        {"TEAM_ID": 1610612747, "PACE": 101.2},
+    ])]
+    with patch("nba_api.stats.endpoints.leaguedashteamstats.LeagueDashTeamStats",
+               return_value=mock_api) as mock_cls, \
+         patch("src.nba_client.time.sleep"), \
+         patch.object(nba_client.cache, "get", return_value=None), \
+         patch.object(nba_client.cache, "set"):
+        result = nba_client.get_team_pace_map()
+
+    # Parseo correcto de PACE
+    assert result == {1610612738: 99.5, 1610612747: 101.2}
+    kwargs = mock_cls.call_args.kwargs
+    # Contrato del kwarg: per_mode_detailed, nunca per_mode_simple
+    assert kwargs.get("per_mode_detailed") == "PerGame"
+    assert "per_mode_simple" not in kwargs
+    # PACE sólo existe con MeasureType=Advanced; el Base (default) no la trae.
+    assert kwargs.get("measure_type_detailed_defense") == "Advanced"
+
+
 def test_nba_h2h_returns_empty_on_api_failure(nba_client):
     """get_h2h retorna [] cuando la API falla (fail-loud path devuelve lista vacía)."""
     with patch("nba_api.stats.endpoints.teamgamelog.TeamGameLog",
