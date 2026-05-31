@@ -146,3 +146,42 @@ class WorldCupClient:
             "lineups", {"match_id": match_id}, config.CACHE_TTL_WC_MATCH,
             f"wc_lineups_{match_id}_{self.lang}",
         )
+
+    def get_squad(self, team_id):
+        """Plantilla de una selección. GET /squads."""
+        return self._cached_get(
+            "squads", {"team_id": team_id}, config.CACHE_TTL_WC_STATIC,
+            f"wc_squads_{team_id}_{self.lang}",
+        )
+
+    def get_history(self, date_from=None, date_to=None, team_id=None):
+        """Partidos finalizados. GET /history (date_from/date_to/team_id opcionales)."""
+        params = {}
+        if date_from is not None:
+            params["date_from"] = date_from
+        if date_to is not None:
+            params["date_to"] = date_to
+        if team_id is not None:
+            params["team_id"] = team_id
+        cache_key = f"wc_history_{date_from}_{date_to}_{team_id}_{self.lang}"
+        return self._cached_get("history", params, config.CACHE_TTL_WC_STATIC, cache_key)
+
+    def get_head2head(self, team1_id, team2_id):
+        """Cara a cara histórico entre dos selecciones. GET /head2head."""
+        params = {"team1_id": team1_id, "team2_id": team2_id}
+        cache_key = f"wc_head2head_{team1_id}_{team2_id}_{self.lang}"
+        return self._cached_get("head2head", params, config.CACHE_TTL_WC_STATIC, cache_key)
+
+    def get_top_scorers(self):
+        """Máximos goleadores. GET /goalscorers."""
+        return self._cached_get(
+            "goalscorers", {}, config.CACHE_TTL_WC_STATIC,
+            f"wc_goalscorers_{self.lang}",
+        )
+
+    def get_cards(self):
+        """Ranking de tarjetas (rojas/amarillas). GET /cards."""
+        return self._cached_get(
+            "cards", {}, config.CACHE_TTL_WC_STATIC,
+            f"wc_cards_{self.lang}",
+        )

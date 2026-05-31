@@ -177,3 +177,59 @@ def test_lineups_url(tmp_path):
     args, kwargs = c.session.get.call_args
     assert args[0].endswith("/lineups")
     assert kwargs["params"]["match_id"] == 335680
+
+
+def test_squad_url(tmp_path):
+    c = _client(tmp_path)
+    c.session.get = MagicMock(return_value=_fake_response({}))
+    c.get_squad(1443)
+    args, kwargs = c.session.get.call_args
+    assert args[0].endswith("/squads")
+    assert kwargs["params"]["team_id"] == 1443
+
+
+def test_history_optional_params(tmp_path):
+    c = _client(tmp_path)
+    c.session.get = MagicMock(return_value=_fake_response({}))
+    c.get_history(date_from="2022-11-01", date_to="2022-12-31")
+    args, kwargs = c.session.get.call_args
+    assert args[0].endswith("/history")
+    p = kwargs["params"]
+    assert p["date_from"] == "2022-11-01"
+    assert p["date_to"] == "2022-12-31"
+    assert "team_id" not in p
+
+
+def test_history_by_team(tmp_path):
+    c = _client(tmp_path)
+    c.session.get = MagicMock(return_value=_fake_response({}))
+    c.get_history(team_id=1443)
+    _, kwargs = c.session.get.call_args
+    assert kwargs["params"]["team_id"] == 1443
+    assert "date_from" not in kwargs["params"]
+
+
+def test_head2head_url(tmp_path):
+    c = _client(tmp_path)
+    c.session.get = MagicMock(return_value=_fake_response({}))
+    c.get_head2head(208, 211)
+    args, kwargs = c.session.get.call_args
+    assert args[0].endswith("/head2head")
+    assert kwargs["params"]["team1_id"] == 208
+    assert kwargs["params"]["team2_id"] == 211
+
+
+def test_top_scorers_url(tmp_path):
+    c = _client(tmp_path)
+    c.session.get = MagicMock(return_value=_fake_response({}))
+    c.get_top_scorers()
+    args, _ = c.session.get.call_args
+    assert args[0].endswith("/goalscorers")
+
+
+def test_cards_url(tmp_path):
+    c = _client(tmp_path)
+    c.session.get = MagicMock(return_value=_fake_response({}))
+    c.get_cards()
+    args, _ = c.session.get.call_args
+    assert args[0].endswith("/cards")
