@@ -92,7 +92,8 @@ class NBAClient:
             time.sleep(0.6)
             raw = leaguedashteamstats.LeagueDashTeamStats(
                 season=NBA_SEASON,
-                per_mode_simple="PerGame",
+                per_mode_detailed="PerGame",
+                measure_type_detailed_defense="Advanced",  # PACE solo está en Advanced
             )
             df = raw.get_data_frames()[0]
             result: dict[int, float] = {}
